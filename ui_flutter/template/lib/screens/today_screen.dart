@@ -154,6 +154,8 @@ class TodayScreenState extends State<TodayScreen> {
   bool _timelineSortByTime = false;
   DateTime? _nowUpdatedAt;
   DateTime? _blocksUpdatedAt;
+  int? _lastAnyEventId;
+  DateTime? _lastAutoBlocksRefreshAt;
   int? _snoozeUntilMs;
   String? _snoozeBlockId;
 
@@ -170,7 +172,7 @@ class TodayScreenState extends State<TodayScreen> {
     refresh(triggerReminder: _viewingToday());
     _nowTimer = Timer.periodic(const Duration(seconds: _nowPollSeconds), (_) {
       if (!_viewingToday()) return;
-      _refreshNow(silent: true);
+      _refreshNow(silent: true, kickBlocksOnChange: true);
     });
     _blocksTimer = Timer.periodic(const Duration(seconds: _blocksPollSeconds), (_) {
       if (!_viewingToday()) return;
@@ -693,11 +695,12 @@ class TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  Future<void> _refreshNow({bool silent = false}) async {
+  Future<void> _refreshNow({bool silent = false, bool kickBlocksOnChange = false}) async {
     if (_refreshingNow) return;
     _refreshingNow = true;
     try {
       final ev = await widget.client.events(limit: 500);
+      final latestAnyId = ev.isEmpty ? null : ev.first.id;
       EventRecord? latestApp;
       EventRecord? latestTab;
       EventRecord? latestAudio;
@@ -733,6 +736,15 @@ class TodayScreenState extends State<TodayScreen> {
         }
       }
       if (!mounted) return;
+      final now = DateTime.now();
+      final anyChanged = latestAnyId != null && latestAnyId != _lastAnyEventId;
+      final canAutoRefreshBlocks = kickBlocksOnChange &&
+          anyChanged &&
+          _viewingToday() &&
+          !_refreshingBlocks &&
+          _blocksUpdatedAt != null &&
+          (_lastAutoBlocksRefreshAt == null ||
+              now.difference(_lastAutoBlocksRefreshAt!) > const Duration(seconds: 10));
       setState(() {
         _latestAppEvent = latestApp;
         _latestTabEvent = latestTab;
@@ -743,8 +755,14 @@ class TodayScreenState extends State<TodayScreen> {
         _latestTitleByKey
           ..clear()
           ..addAll(latestTitles);
-        _nowUpdatedAt = DateTime.now();
+        _nowUpdatedAt = now;
+        _lastAnyEventId = latestAnyId;
+        if (canAutoRefreshBlocks) _lastAutoBlocksRefreshAt = now;
       });
+
+      if (canAutoRefreshBlocks) {
+        unawaited(_refreshBlocks(silent: true, triggerReminder: false));
+      }
     } catch (_) {
       // best effort (Now card shouldn't hard-fail)
     } finally {
