@@ -472,10 +472,10 @@ class TodayScreenState extends State<TodayScreen> {
         if (_coreStoreTitles && normTitle.isNotEmpty) {
           key = "domain|$entity|$normTitle";
           label = normTitle;
-          subtitle = entity;
+          subtitle = displayEntity(entity);
         } else {
           key = "domain|$entity";
-          label = entity;
+          label = displayEntity(entity);
           subtitle = _subtitleForDomainEntity(entity);
         }
       } else {
@@ -1198,8 +1198,18 @@ class TodayScreenState extends State<TodayScreen> {
   }
 
   Widget _nowCard(BuildContext context) {
-    final app = _latestAppEvent;
-    final tab = _latestTabEvent;
+    bool isFresh(EventRecord e, Duration maxAge) {
+      try {
+        final t = DateTime.parse(e.ts).toLocal();
+        return DateTime.now().difference(t) <= maxAge;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    const focusFreshness = Duration(minutes: 3);
+    final app = (_latestAppEvent != null && isFresh(_latestAppEvent!, focusFreshness)) ? _latestAppEvent : null;
+    final tab = (_latestTabEvent != null && isFresh(_latestTabEvent!, focusFreshness)) ? _latestTabEvent : null;
     final audio = _latestAudioEvent;
     final audioStop = _latestAudioStopEvent;
     final appAudio = _latestAppAudioEvent;
@@ -1257,7 +1267,7 @@ class TodayScreenState extends State<TodayScreen> {
 
     final showAppAudio = showAppAudioNow();
     final appLabelLc = app == null ? "" : displayEntity(app.entity).toLowerCase();
-    final browserFocused = app != null &&
+    final appSaysBrowserFocused = app != null &&
         (appLabelLc == "chrome" ||
             appLabelLc == "msedge" ||
             appLabelLc == "edge" ||
@@ -1265,6 +1275,7 @@ class TodayScreenState extends State<TodayScreen> {
             appLabelLc == "vivaldi" ||
             appLabelLc == "opera" ||
             appLabelLc == "firefox");
+    final browserFocused = appSaysBrowserFocused || (app == null && tab != null);
 
     final usingTab = browserFocused ? tab : (showAudio ? audio : null);
     final usingTabIcon = browserFocused ? Icons.public : Icons.headphones;
@@ -1430,10 +1441,10 @@ class TodayScreenState extends State<TodayScreen> {
         if (_coreStoreTitles && normTitle.isNotEmpty) {
           laneKey = "domain|$domain|$normTitle";
           label = normTitle;
-          subtitle = domain;
+          subtitle = displayEntity(domain);
         } else {
           laneKey = "domain|$domain";
-          label = domain;
+          label = displayEntity(domain);
           subtitle = null;
         }
         icon = Icons.public;
@@ -1562,11 +1573,11 @@ class TodayScreenState extends State<TodayScreen> {
           key = "domain|$domain|$normTitle";
           entity = domain;
           label = normTitle;
-          subtitle = domain;
+          subtitle = displayEntity(domain);
         } else {
           key = "domain|$domain";
           entity = domain;
-          label = domain;
+          label = displayEntity(domain);
           subtitle = null;
         }
       } else {
@@ -1697,10 +1708,10 @@ class TodayScreenState extends State<TodayScreen> {
         if (_coreStoreTitles && normTitle.isNotEmpty) {
           entity = domain;
           label = normTitle;
-          subtitle = domain;
+          subtitle = displayEntity(domain);
         } else {
           entity = domain;
-          label = domain;
+          label = displayEntity(domain);
           subtitle = null;
         }
         icon = Icons.public;

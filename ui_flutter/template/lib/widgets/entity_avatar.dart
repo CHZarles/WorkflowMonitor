@@ -37,13 +37,20 @@ class EntityAvatar extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final brightness = Theme.of(context).brightness;
 
+    final isHidden = entity.trim() == "__hidden__";
+
     final seed = "${kind.trim().toLowerCase()}:${entity.trim().toLowerCase()}";
     final h = _fnv1a32(seed).abs() % 360;
     final lightness = brightness == Brightness.dark ? 0.30 : 0.86;
-    final bg = HSLColor.fromAHSL(1.0, h.toDouble(), 0.45, lightness).toColor();
-    final fg = bg.computeLuminance() > 0.55 ? Colors.black : Colors.white;
+    final bg = isHidden
+        ? scheme.surfaceContainerHighest
+        : HSLColor.fromAHSL(1.0, h.toDouble(), 0.45, lightness).toColor();
+    final fg = isHidden
+        ? scheme.onSurfaceVariant
+        : (bg.computeLuminance() > 0.55 ? Colors.black : Colors.white);
 
-    final showIcon = icon != null && kind == "app";
+    final effectiveIcon = isHidden ? Icons.visibility_off_outlined : icon;
+    final showIcon = effectiveIcon != null && (isHidden || kind == "app");
     final text = kind == "domain" ? _firstGlyph(entity) : _firstGlyph(label);
 
     return SizedBox(
@@ -57,7 +64,7 @@ class EntityAvatar extends StatelessWidget {
         ),
         child: Center(
           child: showIcon
-              ? Icon(icon, size: (size * 0.58).clamp(14, 18).toDouble(), color: fg)
+              ? Icon(effectiveIcon, size: (size * 0.58).clamp(14, 18).toDouble(), color: fg)
               : Text(
                   text,
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -71,4 +78,3 @@ class EntityAvatar extends StatelessWidget {
     );
   }
 }
-

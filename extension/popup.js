@@ -21,6 +21,9 @@ async function load() {
 
   const { status } = await chrome.storage.local.get("status");
   renderStatus(status);
+
+  // Best-effort: when the popup opens, force one emit so the status reflects the current tab/audio.
+  forceEmit();
 }
 
 function renderStatus(status) {

@@ -23,7 +23,9 @@ use tracing::{error, info};
 const DEFAULT_PORT: u16 = 17600;
 const TZ_OFFSET_MINUTES_MIN: i32 = -14 * 60;
 const TZ_OFFSET_MINUTES_MAX: i32 = 14 * 60;
-const DOMAIN_FRESHNESS_SECONDS: i64 = 120;
+// How long a tab/domain attribution remains valid while a browser app stays focused.
+// This must be >= browser extension heartbeat (default 60s), with slack for MV3 background throttling.
+const DOMAIN_FRESHNESS_SECONDS: i64 = 300;
 const AUDIO_IDLE_CUTOFF_SECONDS: i64 = 120;
 
 #[derive(Parser, Debug)]
@@ -282,6 +284,57 @@ struct PrivacyRuleUpsert {
     kind: String,
     value: String,
     action: String,
+}
+
+#[derive(Default)]
+struct PrivacyIndex {
+    // (kind, value) -> action ("drop" | "mask")
+    action_by_kind_value: HashMap<(String, String), String>,
+}
+
+impl PrivacyIndex {
+    fn load(conn: &mut Connection) -> rusqlite::Result<Self> {
+        let rules = list_privacy_rules(conn)?;
+        let mut idx = PrivacyIndex::default();
+        for r in rules {
+            idx.action_by_kind_value
+                .insert((r.kind, r.value), r.action);
+        }
+        Ok(idx)
+    }
+
+    fn decision_for(&self, event: &str, entity: &str) -> PrivacyDecision {
+        let kind = privacy_kind_for_event(event);
+        let value = if kind == "domain" {
+            entity.trim().to_lowercase()
+        } else {
+            entity.trim().to_string()
+        };
+        match self
+            .action_by_kind_value
+            .get(&(kind.to_string(), value))
+            .map(|s| s.as_str())
+        {
+            Some("drop") => PrivacyDecision::Drop,
+            Some("mask") => PrivacyDecision::Mask,
+            _ => PrivacyDecision::Allow,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrivacyDecision {
+    Allow,
+    Drop,
+    Mask,
+}
+
+fn privacy_kind_for_event(event: &str) -> &'static str {
+    match event {
+        "tab_active" | "tab_audio_stop" => "domain",
+        "app_active" | "app_audio" | "app_audio_stop" => "app",
+        _ => "app",
+    }
 }
 
 #[tokio::main]
@@ -625,7 +678,8 @@ async fn post_event(State(state): State<AppState>, Json(payload): Json<Value>) -
 async fn get_events(State(state): State<AppState>, Query(q): Query<EventsQuery>) -> Response {
     let limit = q.limit.clamp(1, 500);
     let mut conn = state.conn.lock().await;
-    match list_events(&mut conn, limit) {
+    let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+    match list_events(&mut conn, limit, &privacy) {
         Ok(events) => Json(OkResponse {
             ok: true,
             data: Some(events),
@@ -886,7 +940,8 @@ async fn get_blocks_today(State(state): State<AppState>, Query(q): Query<BlocksQ
 
     let events = {
         let mut conn = state.conn.lock().await;
-        match list_events_between(&mut conn, day_start, day_end) {
+        let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+        match list_events_between(&mut conn, day_start, day_end, &privacy) {
             Ok(v) => v,
             Err(err) => {
                 error!("list_events_between failed: {err}");
@@ -1003,7 +1058,8 @@ async fn get_blocks_due(State(state): State<AppState>, Query(q): Query<BlocksQue
 
     let events = {
         let mut conn = state.conn.lock().await;
-        match list_events_between(&mut conn, day_start, day_end) {
+        let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+        match list_events_between(&mut conn, day_start, day_end, &privacy) {
             Ok(v) => v,
             Err(err) => {
                 error!("list_events_between failed: {err}");
@@ -1064,7 +1120,8 @@ async fn get_timeline_day(State(state): State<AppState>, Query(q): Query<BlocksQ
 
     let events = {
         let mut conn = state.conn.lock().await;
-        match list_events_between(&mut conn, day_start, day_end) {
+        let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+        match list_events_between(&mut conn, day_start, day_end, &privacy) {
             Ok(v) => v,
             Err(err) => {
                 error!("list_events_between failed: {err}");
@@ -1537,7 +1594,8 @@ async fn get_export_markdown(
 
     let events = {
         let mut conn = state.conn.lock().await;
-        match list_events_between(&mut conn, day_start, day_end) {
+        let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+        match list_events_between(&mut conn, day_start, day_end, &privacy) {
             Ok(v) => v,
             Err(err) => {
                 error!("list_events_between failed: {err}");
@@ -1597,7 +1655,8 @@ async fn get_export_csv(State(state): State<AppState>, Query(q): Query<ExportQue
 
     let events = {
         let mut conn = state.conn.lock().await;
-        match list_events_between(&mut conn, day_start, day_end) {
+        let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+        match list_events_between(&mut conn, day_start, day_end, &privacy) {
             Ok(v) => v,
             Err(err) => {
                 error!("list_events_between failed: {err}");
@@ -2017,7 +2076,11 @@ fn tracking_is_paused(conn: &mut Connection, now: OffsetDateTime) -> rusqlite::R
     Ok(true)
 }
 
-fn list_events(conn: &mut Connection, limit: usize) -> rusqlite::Result<Vec<EventRecord>> {
+fn list_events(
+    conn: &mut Connection,
+    limit: usize,
+    privacy: &PrivacyIndex,
+) -> rusqlite::Result<Vec<EventRecord>> {
     let mut stmt = conn.prepare(
         "SELECT id, ts, source, event, entity, title, payload_json FROM events ORDER BY ts DESC LIMIT ?1",
     )?;
@@ -2039,7 +2102,18 @@ fn list_events(conn: &mut Connection, limit: usize) -> rusqlite::Result<Vec<Even
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r?);
+        let mut e = r?;
+        if let Some(entity) = e.entity.as_deref() {
+            match privacy.decision_for(&e.event, entity) {
+                PrivacyDecision::Allow => {}
+                PrivacyDecision::Drop => continue,
+                PrivacyDecision::Mask => {
+                    e.entity = Some("__hidden__".to_string());
+                    e.title = None;
+                }
+            }
+        }
+        out.push(e);
     }
     Ok(out)
 }
@@ -2061,6 +2135,7 @@ fn list_events_between(
     conn: &mut Connection,
     start: OffsetDateTime,
     end: OffsetDateTime,
+    privacy: &PrivacyIndex,
 ) -> rusqlite::Result<Vec<EventForBlocks>> {
     let start_s = start.format(&Rfc3339).unwrap_or_default();
     let end_s = end.format(&Rfc3339).unwrap_or_default();
@@ -2088,7 +2163,16 @@ fn list_events_between(
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r?);
+        let mut e = r?;
+        match privacy.decision_for(&e.event, &e.entity) {
+            PrivacyDecision::Allow => {}
+            PrivacyDecision::Drop | PrivacyDecision::Mask => {
+                // For timeline/blocks/export: keep timing continuity, but hide sensitive entities retroactively.
+                e.entity = "__hidden__".to_string();
+                e.title = None;
+            }
+        }
+        out.push(e);
     }
     Ok(out)
 }

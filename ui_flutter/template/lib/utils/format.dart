@@ -17,6 +17,7 @@ String formatHHMM(String rfc3339) {
 String displayEntity(String? raw) {
   final v = (raw ?? "").trim();
   if (v.isEmpty) return "(unknown)";
+  if (v == "__hidden__") return "(hidden)";
   final base = v.split(RegExp(r"[\\/]+")).last;
   if (base.toLowerCase().endsWith(".exe")) {
     return base.substring(0, base.length - 4);
@@ -56,6 +57,7 @@ String? extractVscodeWorkspace(String windowTitle) {
 String displayTopItemName(TopItem it) {
   final raw = it.name;
   final kind = it.kind;
+  if (raw.trim() == "__hidden__") return "(hidden)";
   final isApp = kind == "app" || raw.contains("\\") || raw.contains("/") || raw.startsWith("pid:");
   if (!isApp) return raw;
   final base = raw.split(RegExp(r"[\\/]+")).last;

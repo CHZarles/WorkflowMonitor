@@ -208,11 +208,11 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
           key = "domain|$domain|$normTitle";
           entity = domain;
           label = normTitle;
-          subtitle = domain;
+          subtitle = displayEntity(domain);
         } else {
           key = "domain|$domain";
           entity = domain;
-          label = domain;
+          label = displayEntity(domain);
           subtitle = null;
         }
       } else {
