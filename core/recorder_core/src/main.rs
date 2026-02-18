@@ -2238,7 +2238,32 @@ impl EntityKind {
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct BucketKey {
     kind: EntityKind,
-    name: String,
+    entity: String,
+    title: Option<String>,
+}
+
+fn normalize_web_title(domain: &str, raw: &str) -> String {
+    let mut t = raw.trim().to_string();
+    if t.is_empty() {
+        return String::new();
+    }
+    let d = domain.to_lowercase();
+    if d.contains("youtube.") && t.ends_with(" - YouTube") {
+        t.truncate(t.len().saturating_sub(" - YouTube".len()));
+    }
+    t.trim().to_string()
+}
+
+fn normalized_title_for_domain(domain: &str, raw: Option<&str>, store_titles: bool) -> Option<String> {
+    if !store_titles {
+        return None;
+    }
+    let r = raw?.trim();
+    if r.is_empty() {
+        return None;
+    }
+    let t = normalize_web_title(domain, r);
+    if t.is_empty() { None } else { Some(t) }
 }
 
 fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTime) -> Vec<BlockSummary> {
@@ -2294,6 +2319,7 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
 
     let mut current_app: Option<String> = None;
     let mut current_domain: Option<String> = None;
+    let mut current_domain_title: Option<String> = None;
     let mut current_domain_ts: Option<OffsetDateTime> = None;
 
     for i in 0..focus_events.len() {
@@ -2309,11 +2335,13 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
             }
             "tab_active" => {
                 current_domain = Some(cur.entity.clone());
+                current_domain_title = cur.title.clone();
                 current_domain_ts = Some(cur.ts);
             }
             "tab_audio_stop" => {
                 // Stop marker: clear domain so subsequent time isn't attributed to any tab.
                 current_domain = None;
+                current_domain_title = None;
                 current_domain_ts = None;
             }
             "app_audio_stop" => {
@@ -2334,25 +2362,27 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
 
         let mut seg_start = cur.ts;
 
-        let resolve_entity = |at: OffsetDateTime| -> Option<(EntityKind, &str)> {
+        let resolve_entity = |at: OffsetDateTime| -> Option<(EntityKind, &str, Option<&str>)> {
             if let Some(app) = current_app.as_deref() {
                 if is_browser_app(app) {
                     if let (Some(domain), Some(domain_ts)) =
                         (current_domain.as_deref(), current_domain_ts)
                     {
                         if at - domain_ts <= domain_freshness {
-                            Some((EntityKind::Domain, domain))
+                            Some((EntityKind::Domain, domain, current_domain_title.as_deref()))
                         } else {
-                            Some((EntityKind::App, app))
+                            Some((EntityKind::App, app, None))
                         }
                     } else {
-                        Some((EntityKind::App, app))
+                        Some((EntityKind::App, app, None))
                     }
                 } else {
-                    Some((EntityKind::App, app))
+                    Some((EntityKind::App, app, None))
                 }
             } else {
-                current_domain.as_deref().map(|d| (EntityKind::Domain, d))
+                current_domain
+                    .as_deref()
+                    .map(|d| (EntityKind::Domain, d, current_domain_title.as_deref()))
             }
         };
 
@@ -2363,10 +2393,15 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
 
             let take_s = take.whole_seconds();
             if take_s > 0 {
-                if let Some((kind, entity)) = resolved_entity {
+                if let Some((kind, entity, title)) = resolved_entity {
                     let key = BucketKey {
                         kind,
-                        name: entity.to_string(),
+                        entity: entity.to_string(),
+                        title: if kind == EntityKind::Domain {
+                            normalized_title_for_domain(entity, title, settings.store_titles)
+                        } else {
+                            None
+                        },
                     };
                     *bucket.entry(key).or_insert(0) += take_s;
                     active_seconds += take_s;
@@ -2400,6 +2435,7 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
             active_seconds = 0;
             current_app = None;
             current_domain = None;
+            current_domain_title = None;
             current_domain_ts = None;
         }
     }
@@ -2411,7 +2447,7 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
     if !audio_events.is_empty() && !blocks.is_empty() {
         // Audio events are heartbeated by the extension (default 60s). Use a tighter cutoff than the
         // primary focus idle cutoff to avoid over-attributing when audio stops but no "stop" event is sent.
-        attach_background_audio(&mut blocks, &audio_events, audio_idle_cutoff, now);
+        attach_background_audio(&mut blocks, &audio_events, settings.store_titles, audio_idle_cutoff, now);
     }
 
     blocks
@@ -2630,6 +2666,7 @@ fn build_timeline_segments(
 fn attach_background_audio(
     blocks: &mut [BlockSummary],
     audio_events: &[EventForBlocks],
+    store_titles: bool,
     idle_cutoff: time::Duration,
     now: OffsetDateTime,
 ) {
@@ -2675,7 +2712,12 @@ fn attach_background_audio(
             } else {
                 EntityKind::Domain
             },
-            name: cur.entity.clone(),
+            entity: cur.entity.clone(),
+            title: if cur.event == "tab_active" {
+                normalized_title_for_domain(&cur.entity, cur.title.as_deref(), store_titles)
+            } else {
+                None
+            },
         };
 
         while bi < block_times.len() && block_times[bi].1 <= seg_start {
@@ -2709,10 +2751,17 @@ fn attach_background_audio(
         }
         let mut items: Vec<TopItem> = per_block[i]
             .iter()
-            .map(|(k, sec)| TopItem {
-                kind: k.kind.as_str().to_string(),
-                name: k.name.clone(),
-                seconds: *sec,
+            .map(|(k, sec)| {
+                let name = if k.kind == EntityKind::Domain {
+                    k.title.clone().unwrap_or_else(|| k.entity.clone())
+                } else {
+                    k.entity.clone()
+                };
+                TopItem {
+                    kind: k.kind.as_str().to_string(),
+                    name,
+                    seconds: *sec,
+                }
             })
             .collect();
         items.sort_by(|a, b| b.seconds.cmp(&a.seconds));
@@ -2734,10 +2783,17 @@ fn finalize_block(
 
     let mut items: Vec<TopItem> = bucket
         .iter()
-        .map(|(k, v)| TopItem {
-            kind: k.kind.as_str().to_string(),
-            name: k.name.clone(),
-            seconds: *v,
+        .map(|(k, v)| {
+            let name = if k.kind == EntityKind::Domain {
+                k.title.clone().unwrap_or_else(|| k.entity.clone())
+            } else {
+                k.entity.clone()
+            };
+            TopItem {
+                kind: k.kind.as_str().to_string(),
+                name,
+                seconds: *v,
+            }
         })
         .collect();
     items.sort_by(|a, b| b.seconds.cmp(&a.seconds));
@@ -3059,5 +3115,63 @@ mod tests {
         assert_eq!(sec("github.com"), 3 * 60);
         assert_eq!(sec("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"), 60);
         assert_eq!(sec("C:\\Program Files\\Microsoft VS Code\\Code.exe"), 60);
+    }
+
+    #[test]
+    fn build_blocks_splits_domain_by_title_when_store_titles() {
+        let base = OffsetDateTime::parse("2026-02-15T00:00:00Z", &Rfc3339).unwrap();
+        let m = |mins: i64| base + time::Duration::minutes(mins);
+
+        let events = vec![
+            EventForBlocks {
+                ts: m(0),
+                source: "windows_collector".to_string(),
+                event: "app_active".to_string(),
+                entity: "chrome.exe".to_string(),
+                title: None,
+                activity: None,
+            },
+            EventForBlocks {
+                ts: m(1),
+                source: "browser_extension".to_string(),
+                event: "tab_active".to_string(),
+                entity: "www.youtube.com".to_string(),
+                title: Some("Video A - YouTube".to_string()),
+                activity: None,
+            },
+            EventForBlocks {
+                ts: m(2),
+                source: "browser_extension".to_string(),
+                event: "tab_active".to_string(),
+                entity: "www.youtube.com".to_string(),
+                title: Some("Video B - YouTube".to_string()),
+                activity: None,
+            },
+        ];
+
+        let settings = Settings {
+            block_seconds: 45 * 60,
+            idle_cutoff_seconds: 10 * 60,
+            store_titles: true,
+            store_exe_path: false,
+        };
+        let blocks = build_blocks(&events, settings, m(3));
+        assert_eq!(blocks.len(), 1);
+        let b = &blocks[0];
+
+        let sec_domain = |name: &str| {
+            b.top_items
+                .iter()
+                .find(|it| it.kind == "domain" && it.name == name)
+                .map(|it| it.seconds)
+                .unwrap_or(0)
+        };
+
+        assert_eq!(sec_domain("Video A"), 60);
+        assert_eq!(sec_domain("Video B"), 60);
+        assert!(
+            b.top_items.iter().all(|it| it.name != "www.youtube.com"),
+            "domain should be replaced by normalized title when available"
+        );
     }
 }
