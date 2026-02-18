@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RecorderPhone</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { margin: 0; padding: 12px; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto; width: 320px; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+      label { user-select: none; }
+      input[type="text"] { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(127,127,127,.35); }
+      .muted { opacity: .75; font-size: 12px; }
+      .status { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(127,127,127,.25); }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+      button { padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35); background: transparent; cursor: pointer; }
+      button:hover { background: rgba(127,127,127,.12); }
+    </style>
+  </head>
+  <body>
+    <h1>RecorderPhone</h1>
+
+    <div class="row">
+      <label for="enabled">Enable tracking</label>
+      <input id="enabled" type="checkbox" />
+    </div>
+
+    <div class="row">
+      <label for="sendTitle">Send tab title (optional)</label>
+      <input id="sendTitle" type="checkbox" />
+    </div>
+
+    <div class="row">
+      <label for="trackBgAudio">Track background audio (audible tab)</label>
+      <input id="trackBgAudio" type="checkbox" />
+    </div>
+
+    <div style="margin: 10px 0 6px; font-weight: 600;">Server URL</div>
+    <input id="serverUrl" type="text" spellcheck="false" />
+    <div class="muted">Default: <code>http://127.0.0.1:17600</code></div>
+
+    <div class="row" style="margin-top: 10px;">
+      <button id="testHealth" type="button">Test /health</button>
+      <button id="forceEmit" type="button">Force send</button>
+      <span id="healthResult" class="muted"></span>
+    </div>
+
+    <div class="status">
+      <div class="muted" style="margin-bottom: 6px;">Last status</div>
+      <div id="statusLine" class="muted">(no data yet)</div>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

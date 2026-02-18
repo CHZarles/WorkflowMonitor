@@ -1,0 +1,65 @@
+# RecorderPhone（工程骨架）
+
+这是一套跨设备“使用记录 + 周期复盘”系统的**工程骨架**，包含：
+- Core：跨平台本机服务（Rust + SQLite + blocks/导出）
+- UI：Flutter（Windows/Android 共用，当前提供模板）
+- Windows Collector：最小 Win32 采集器（Rust，前台应用/可选窗口标题 + 后台音频 App（QQ 音乐等））
+- 浏览器扩展：Chrome/Edge Manifest V3（**域名级**活跃 Tab（focus）+ 可选后台音频 Tab（audio）上报 → POST 到 Core）
+
+设计文档：
+- `PRD.md`
+- `IA_WIREFRAMES.md`
+- `VISUAL_STYLE.md`
+- `COMPONENTS_TOKENS.md`
+- `design-tokens.json`（Light/Dark + tokens 源数据）
+- `WINDOWS_DEV.md`（在 Windows 查看最新开发进展：WSL 同步 + Flutter 覆盖流程）
+
+## 目录结构
+```
+core/           Core 本机服务（Rust）
+collectors/     采集器（Windows）
+ui_flutter/     Flutter UI 模板（需 flutter create 生成平台目录）
+extension/      Chrome/Edge MV3 扩展（域名级上报）
+schemas/        本机上报事件 schema
+samples/        主题映射示例（Android/WPF/WinUI）
+dev/            开发脚本（WSL 联调 / 同步到 Windows）
+
+# 旧原型（可忽略）
+windows/        WinUI 3 原型（已不作为主路径）
+android/        Android Compose 原型（已不作为主路径）
+```
+
+## Tokens（两端主题接入）
+- 源数据：`design-tokens.json`
+- Flutter 模板：`ui_flutter/template/lib/theme/tokens.dart`
+- WinUI/Compose 的主题映射仍保留在旧原型里（后续可移除）
+
+> 目前是“手动同步”方式：tokens 变化后需要同步更新两端映射文件（后续可加生成脚本）。
+
+## 浏览器扩展 → Core（开发期链路）
+- 扩展默认上报到：`http://127.0.0.1:17600/event`
+- 事件结构：`schemas/ingest-event.schema.json`
+- Core 默认提供 `/health`、`/event`、`/events`、`/blocks/today`、`/blocks/review`、`/privacy/rules`、`/export/markdown`、`/export/csv`（见 `core/README.md`）
+
+## 如何构建/运行
+- Core：见 `core/README.md`
+- Collectors：见 `collectors/README.md`
+- Flutter UI：见 `ui_flutter/README.md`
+- Extension：见 `extension/README.md`
+
+## Quickstart（先把链路跑通）
+### 方案 A（WSL 也能跑通：推荐）
+1. 在 WSL 启动 Core：`cargo run -p recorder_core -- --listen 127.0.0.1:17600`
+2. 在 Windows 浏览器加载 `extension/`（解压加载），popup 点击 `Test /health` 应显示 `OK`
+3. 随便打开/切换几个网页 tab：访问 `http://127.0.0.1:17600/events` 能看到域名事件
+
+### 方案 B（仅用于扩展联调：不支持 UI）
+1. 在 WSL 启动简化接收服务：`node dev/ingest-server.mjs`
+2. 说明：该服务只提供 `/health`、`/event`、`/events`，不提供 `/settings`、`/blocks/today`、`/privacy/rules` 等接口  
+   如果你要运行 Flutter UI（Today Top/Review/Settings/导出），请使用方案 A 启动 `recorder_core`。
+
+## 一键全清（重置所有数据）
+这会删除 Core 的 SQLite 数据库（包含：events、blocks/review、privacy rules、settings）。
+
+- WSL/Linux：`bash dev/wipe-core-db.sh`
+- Windows（仅当 Core 在 Windows 上运行时）：`powershell -ExecutionPolicy Bypass -File .\\dev\\wipe-core-db.ps1`

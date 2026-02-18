@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+  "core/recorder_core",
+  "collectors/windows_collector"
+]
+default-members = [
+  "core/recorder_core"
+]
+

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://recorderphone.local/schemas/ingest-event.schema.json",
+  "title": "RecorderPhone Ingest Event (Core)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "ts", "source", "event"],
+  "properties": {
+    "v": { "type": "integer", "minimum": 1 },
+    "ts": {
+      "description": "Event timestamp (ISO 8601 / RFC 3339).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["browser_extension", "windows_collector"]
+    },
+    "event": {
+      "type": "string",
+      "enum": ["tab_active", "tab_audio_stop", "app_active", "app_audio", "app_audio_stop"]
+    }
+  },
+  "oneOf": [
+    {
+      "title": "Browser tab active (domain-level)",
+      "required": ["domain"],
+      "properties": {
+        "source": { "const": "browser_extension" },
+        "event": { "const": "tab_active" },
+        "activity": {
+          "description": "How this tab is considered 'active'. 'focus' = active tab in the focused browser window. 'audio' = audible tab while browser is not focused (background usage).",
+          "type": "string",
+          "enum": ["focus", "audio"]
+        },
+        "browser": { "type": "string", "enum": ["chrome", "edge", "unknown"] },
+        "domain": {
+          "description": "Hostname only (domain-level tracking).",
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "description": "Optional tab title (only if user enables it).",
+          "type": "string"
+        },
+        "windowId": { "type": "integer" },
+        "tabId": { "type": "integer" }
+      }
+    },
+    {
+      "title": "Browser background audio stop marker",
+      "required": ["domain"],
+      "properties": {
+        "source": { "const": "browser_extension" },
+        "event": { "const": "tab_audio_stop" },
+        "activity": {
+          "description": "Stop marker for background audio usage. Used to end attribution when audio stops or when the browser returns to foreground.",
+          "type": "string",
+          "enum": ["audio"]
+        },
+        "browser": { "type": "string", "enum": ["chrome", "edge", "unknown"] },
+        "domain": {
+          "description": "Last known hostname for the audible tab (domain-level).",
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": { "type": "string" },
+        "windowId": { "type": "integer" },
+        "tabId": { "type": "integer" }
+      }
+    },
+    {
+      "title": "Windows foreground app active",
+      "required": ["app"],
+      "properties": {
+        "source": { "const": "windows_collector" },
+        "event": { "const": "app_active" },
+        "app": {
+          "description": "App identity string (e.g. executable path or stable id).",
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "description": "Optional window title (privacy level L2).",
+          "type": "string"
+        },
+        "pid": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "title": "Windows background app audio (CoreAudio session active)",
+      "required": ["app"],
+      "properties": {
+        "source": { "const": "windows_collector" },
+        "event": { "const": "app_audio" },
+        "activity": { "type": "string", "enum": ["audio"] },
+        "app": {
+          "description": "Executable name (best-effort) for the process producing audio.",
+          "type": "string",
+          "minLength": 1
+        },
+        "exePath": {
+          "description": "Optional full executable path (only if user enables it).",
+          "type": "string"
+        },
+        "pid": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "title": "Windows background app audio stop marker",
+      "required": ["app"],
+      "properties": {
+        "source": { "const": "windows_collector" },
+        "event": { "const": "app_audio_stop" },
+        "activity": { "type": "string", "enum": ["audio"] },
+        "app": {
+          "description": "Last known executable name for the audio session.",
+          "type": "string",
+          "minLength": 1
+        },
+        "exePath": { "type": "string" },
+        "pid": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string" }
+      }
+    }
+  ]
+}

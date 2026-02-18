@@ -1,0 +1,62 @@
+{
+  "meta": {
+    "product": "RecorderPhone",
+    "version": "0.1",
+    "generatedAt": "2026-02-15",
+    "notes": "Light/dark themes + shared tokens. Map to Material 3 / Fluent in platform code."
+  },
+  "themes": {
+    "light": {
+      "color": {
+        "bg": { "0": "#FFFFFF", "1": "#F6F7F9" },
+        "surface": { "0": "#FFFFFF", "1": "#F2F3F5" },
+        "border": { "0": "#E6E8EC" },
+        "text": { "0": "#0B0F1A", "1": "#3B4252", "2": "#6B7280" },
+        "accent": { "0": "#2F80ED", "1": "#1B5FD6", "soft": "rgba(47,128,237,0.12)" },
+        "semantic": {
+          "success": "#22C55E",
+          "warning": "#F59E0B",
+          "danger": "#EF4444",
+          "info": "#38BDF8"
+        }
+      }
+    },
+    "dark": {
+      "color": {
+        "bg": { "0": "#0B0F1A", "1": "#0F1624" },
+        "surface": { "0": "#111A2B", "1": "#162238" },
+        "border": { "0": "#22314D" },
+        "text": { "0": "#F3F6FF", "1": "#C7D0E0", "2": "#93A3BD" },
+        "accent": { "0": "#2F80ED", "1": "#1B5FD6", "soft": "rgba(47,128,237,0.18)" },
+        "semantic": {
+          "success": "#22C55E",
+          "warning": "#F59E0B",
+          "danger": "#EF4444",
+          "info": "#38BDF8"
+        }
+      }
+    }
+  },
+  "tokens": {
+    "space": { "1": 4, "2": 8, "3": 12, "4": 16, "5": 20, "6": 24, "8": 32 },
+    "radius": { "s": 8, "m": 12, "l": 16 },
+    "border": { "1": 1 },
+    "type": {
+      "display": { "fontSize": 22, "fontWeight": 600, "lineHeight": 28 },
+      "title": { "fontSize": 18, "fontWeight": 600, "lineHeight": 24 },
+      "body": { "fontSize": 15, "fontWeight": 400, "lineHeight": 22 },
+      "caption": { "fontSize": 13, "fontWeight": 400, "lineHeight": 18 }
+    },
+    "motion": {
+      "duration": { "shortMs": 140, "mediumMs": 220 },
+      "easing": { "standard": "ease-out" }
+    },
+    "icon": { "size": { "s": 16, "m": 20, "l": 24 } },
+    "hit": { "min": 48 },
+    "elevation": {
+      "1": { "y": 2, "blur": 12, "opacity": 0.08 },
+      "2": { "y": 6, "blur": 20, "opacity": 0.14 }
+    }
+  }
+}
+

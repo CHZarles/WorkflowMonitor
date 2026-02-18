@@ -1,0 +1,83 @@
+<Window
+    x:Class="RecorderPhone.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:RecorderPhone.Windows"
+    Title="RecorderPhone"
+    Width="980"
+    Height="720">
+
+    <Grid Background="{ThemeResource BrushBg1}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Top bar -->
+        <Grid Margin="{StaticResource MarginPage}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel>
+                <TextBlock Text="RecorderPhone" Style="{StaticResource TextDisplayStyle}" />
+                <TextBlock Text="{x:Bind ViewModel.ServerStatus, Mode=OneWay}"
+                           Style="{StaticResource TextBodyStyle}"
+                           Foreground="{ThemeResource BrushText1}" />
+            </StackPanel>
+
+            <Button Grid.Column="1"
+                    Style="{StaticResource PrimaryButtonStyle}"
+                    Content="Open Settings (TODO)"
+                    VerticalAlignment="Top" />
+        </Grid>
+
+        <!-- Content -->
+        <Grid Grid.Row="1" Margin="{StaticResource MarginPage}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" />
+                <ColumnDefinition Width="{StaticResource GridGutter}" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Today timeline placeholder -->
+            <Border Style="{StaticResource BlockCardBorderStyle}">
+                <StackPanel Spacing="{StaticResource Space2}">
+                    <TextBlock Text="Today (Wireframe placeholder)"
+                               FontSize="{StaticResource FontSizeTitle}"
+                               FontWeight="SemiBold"
+                               Foreground="{ThemeResource BrushText0}" />
+                    <TextBlock Text="Next: render BlockCard list + review flow (see IA_WIREFRAMES.md)"
+                               Style="{StaticResource TextBodyStyle}"
+                               Foreground="{ThemeResource BrushText1}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Recent ingest events -->
+            <Border Grid.Column="2" Style="{StaticResource BlockCardBorderStyle}">
+                <StackPanel Spacing="{StaticResource Space2}">
+                    <TextBlock Text="Browser events (from extension)"
+                               FontSize="{StaticResource FontSizeTitle}"
+                               FontWeight="SemiBold"
+                               Foreground="{ThemeResource BrushText0}" />
+
+                    <ListView ItemsSource="{x:Bind ViewModel.RecentEvents, Mode=OneWay}"
+                              MinHeight="320">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:IngestEventLine">
+                                <StackPanel>
+                                    <TextBlock Text="{x:Bind Title}" Foreground="{ThemeResource BrushText0}" />
+                                    <TextBlock Text="{x:Bind Subtitle}" Foreground="{ThemeResource BrushText2}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <TextBlock Text="Tip: install extension/ and keep a tab active."
+                               Foreground="{ThemeResource BrushText2}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

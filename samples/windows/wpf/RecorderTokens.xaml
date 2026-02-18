@@ -1,0 +1,54 @@
+<!--
+  RecorderPhone — WPF tokens (non-color)
+
+  Source of truth:
+  - ../../../design-tokens.json (tokens.*)
+
+  Usage (example):
+    <Application.Resources>
+      <ResourceDictionary>
+        <ResourceDictionary.MergedDictionaries>
+          <ResourceDictionary Source="Themes/RecorderTokens.xaml" />
+          <ResourceDictionary Source="Themes/RecorderColors.Light.xaml" />
+        </ResourceDictionary.MergedDictionaries>
+      </ResourceDictionary>
+    </Application.Resources>
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+
+  <!-- Spacing (px) -->
+  <sys:Double x:Key="Space1">4</sys:Double>
+  <sys:Double x:Key="Space2">8</sys:Double>
+  <sys:Double x:Key="Space3">12</sys:Double>
+  <sys:Double x:Key="Space4">16</sys:Double>
+  <sys:Double x:Key="Space5">20</sys:Double>
+  <sys:Double x:Key="Space6">24</sys:Double>
+  <sys:Double x:Key="Space8">32</sys:Double>
+
+  <!-- Common paddings -->
+  <Thickness x:Key="PaddingCard">16</Thickness>
+  <Thickness x:Key="PaddingSheet">20</Thickness>
+  <Thickness x:Key="PaddingButton">12,8</Thickness>
+
+  <!-- Radius -->
+  <CornerRadius x:Key="RadiusS">8</CornerRadius>
+  <CornerRadius x:Key="RadiusM">12</CornerRadius>
+  <CornerRadius x:Key="RadiusL">16</CornerRadius>
+
+  <!-- Border -->
+  <Thickness x:Key="BorderThickness1">1</Thickness>
+
+  <!-- Typography (font sizes in px; font family should follow system default: Segoe UI Variable) -->
+  <sys:Double x:Key="FontSizeDisplay">22</sys:Double>
+  <sys:Double x:Key="FontSizeTitle">18</sys:Double>
+  <sys:Double x:Key="FontSizeBody">15</sys:Double>
+  <sys:Double x:Key="FontSizeCaption">13</sys:Double>
+
+  <!-- Motion -->
+  <Duration x:Key="MotionShort">0:0:0.14</Duration>
+  <Duration x:Key="MotionMedium">0:0:0.22</Duration>
+
+</ResourceDictionary>
+

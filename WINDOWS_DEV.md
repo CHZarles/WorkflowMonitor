@@ -1,0 +1,156 @@
+# 在 Windows 查看最新开发进展（WSL 开发流）
+
+你现在的工作方式是：**WSL 里改代码**，但很多“看效果”的动作（Flutter Windows、浏览器扩展、Windows 采集器）都发生在 **Windows**。  
+这份文档把“如何在 Windows 看到 WSL 的最新改动”讲清楚，并给出可复制的命令。
+
+---
+
+## 0) 关键点：模板 vs 真实 Flutter 工程
+
+仓库里 `ui_flutter/template/` 只是 **模板源码**；你在 Windows 上运行的是 `recorderphone_ui/`（`flutter create` 生成的真实工程）。
+
+因此：
+- WSL 同步脚本会**同步整个仓库到 Windows**，但会**刻意排除** `recorderphone_ui/`（避免 rsync `--delete` 把你的 Windows 工程删掉）。
+- **UI 变更要生效**：你需要把 `ui_flutter/template/` 的内容手动覆盖到 `recorderphone_ui/`。
+
+如果你感觉“界面没变化”，通常就是因为只同步了仓库，但**没有覆盖到 `recorderphone_ui/lib`**（这是正常现象）。
+
+---
+
+## 1) WSL → Windows 镜像同步（推荐常驻）
+
+在 WSL 执行（会持续监听文件变化并 rsync 到 Windows）：
+
+```bash
+cd /home/charles/RecorderPhone
+node dev/sync-to-windows.mjs /mnt/c/src/RecorderPhone
+```
+
+对应 Windows 路径：
+- WSL：`/mnt/c/src/RecorderPhone`
+- Windows：`C:\src\RecorderPhone`
+
+> 若提示没有 rsync：在 WSL 安装 `rsync` 后重试（例如 Ubuntu：`sudo apt-get update && sudo apt-get install -y rsync`）。
+
+---
+
+## 2) 把模板 UI 覆盖到 Windows 的 Flutter 工程（每次 UI 改动后做）
+
+在 **Windows PowerShell** 执行（可整段复制）：
+
+```powershell
+cd C:\src\RecorderPhone
+
+# 用模板覆盖真实工程的 lib/（会删除 lib/ 下模板没有的文件）
+robocopy .\ui_flutter\template\lib .\recorderphone_ui\lib /MIR
+
+# 覆盖 pubspec.yaml（PowerShell 用 Copy-Item，别用 copy /Y）
+Copy-Item -Force .\ui_flutter\template\pubspec.yaml .\recorderphone_ui\pubspec.yaml
+
+cd .\recorderphone_ui
+flutter pub get
+```
+
+也可以直接跑脚本（等价于上面的命令）：
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\overlay-ui.ps1
+```
+
+如果你 **不想/不能** 在 PowerShell 里跑命令（比如执行策略限制），可以在 **WSL** 跑一条命令把模板覆盖到 Windows 工程：
+```bash
+cd /home/charles/RecorderPhone
+node dev/overlay-ui-to-windows.mjs /mnt/c/src/RecorderPhone --watch
+```
+> 需要 WSL 已安装 `rsync`（同 1)）。
+
+然后运行 UI：
+```powershell
+flutter run -d windows
+```
+
+快速自检（确认你确实覆盖成功）：
+- 打开 `C:\src\RecorderPhone\recorderphone_ui\lib\screens\today_screen.dart`，搜索 `Block details`。
+- 如果没有这个字符串，说明模板还没覆盖到真实工程。
+
+---
+
+## 3) Core（Rust 服务）怎么跑，Windows 怎么验证
+
+在 WSL 启动 Core（推荐带端口）：
+```bash
+cargo run -p recorder_core -- --listen 127.0.0.1:17600
+```
+
+在 Windows 验证：
+- 浏览器打开 `http://127.0.0.1:17600/health` 应返回 `{"ok":true,...}`
+- 再验证一次：`http://127.0.0.1:17600/settings` 应返回 `{"ok":true,"data":{...}}`
+- 或者扩展 popup 点 `Test /health` 显示 `OK`
+
+> 如果 Windows 访问不到 WSL 的 Core：把监听改为 `0.0.0.0:17600` 再试：  
+> `cargo run -p recorder_core -- --listen 0.0.0.0:17600`
+
+### /settings 返回 404 怎么办？
+如果你在 Windows 执行：
+```powershell
+curl.exe -sS -i http://127.0.0.1:17600/settings
+```
+看到 `HTTP/1.1 404 Not Found`，说明 **当前监听 17600 的进程不是最新版 recorder_core**（可能是旧 binary，或你启动了 `dev/ingest-server.mjs` 这种只支持 `/health`/`/event`/`/events` 的服务）。
+
+先查一下是谁占用了端口：
+```powershell
+netstat -ano | findstr :17600
+```
+拿到 PID 后看进程名（任选其一）：
+```powershell
+tasklist /FI "PID eq <PID>"
+# 或
+Get-Process -Id <PID>
+```
+如果确认是旧进程，直接关掉：
+```powershell
+taskkill /PID <PID> /F
+```
+然后回到 WSL 重新启动 recorder_core，再重试 `/settings`。
+
+---
+
+## 4) 浏览器扩展如何看最新
+
+扩展代码同步到 Windows 镜像后（`C:\src\RecorderPhone\extension`），在 Edge/Chrome 的“加载已解压”页面：
+- 选择目录：`C:\src\RecorderPhone\extension`
+- 改了扩展代码后：点“重新加载”按钮（或关闭/打开扩展）
+
+---
+
+## 5) 我怎么确认“我看到的是最新进展”
+
+推荐按下面顺序做一次“最短闭环”：
+1. WSL：Core 正常运行（`/health` OK）
+2. Windows：Flutter 先执行一次“模板覆盖”命令，再 `flutter run -d windows`
+3. Windows：扩展重新加载，切换几个 tab
+4. Flutter：`Today` 页能看到 `Today Top`（应用/域名列表，带时长条形图）
+5. Flutter：去 `Review` 页打开任意 block，弹出 `Block details`，能看到 TopN 条形图/Tags/黑名单按钮（含 Background audio）
+
+---
+
+## 6) Windows Toast 点击后直达 Quick Review（可选）
+
+Windows 采集器会在“某个 block 到点且还没复盘”时弹出 Toast。为了让 **点击 Toast 直接打开 UI 的 Quick Review**，需要在 Windows 注册一次自定义协议：`recorderphone://`
+
+在 **Windows PowerShell** 运行（可整段复制）：
+
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\install-recorderphone-protocol.ps1
+```
+
+如果脚本提示找不到 `recorderphone_ui.exe`：
+- 先运行一次 Windows UI（会生成 exe）：
+  - `cd C:\src\RecorderPhone\recorderphone_ui`
+  - `flutter run -d windows`
+- 然后再重新跑安装脚本
+
+自检：
+- `Win + R` 输入：`recorderphone://review`（应能启动 RecorderPhone UI）
+ - Toast 的按钮（如果开启了 `windows_collector --review-notify`）：`Quick Review` / `Skip` / `Pause 15m` 都会通过 `recorderphone://...` 深链触发

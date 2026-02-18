@@ -1,0 +1,32 @@
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+.vs/
+*.iml
+
+# Android / Gradle
+android/**/build/
+android/**/.gradle/
+android/**/local.properties
+android/**/.kotlin/
+
+# .NET
+windows/**/bin/
+windows/**/obj/
+
+# Node
+node_modules/
+
+# Local data
+data/
+
+# Rust
+target/
+
+# Flutter (when generated)
+ui_flutter/**/.dart_tool/
+ui_flutter/**/build/
+ui_flutter/**/.flutter-plugins
+ui_flutter/**/.flutter-plugins-dependencies
+ui_flutter/**/.idea/
