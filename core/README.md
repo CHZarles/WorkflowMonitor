@@ -11,6 +11,7 @@ cargo run -p recorder_core -- --listen 127.0.0.1:17600 --db ./data/recorder-core
 - `GET /health`
 - `POST /event`（扩展/采集器上报，schema 参考 `schemas/ingest-event.schema.json`）
 - `GET /events?limit=50`
+- `GET /now?limit=200`（返回 “Now” 专用快照：最近的 app/tab/audio 事件 + 少量 title 提示，供 UI 高频轮询）
 - `GET /tracking/status`（`paused` / `paused_until_ts`）
 - `POST /tracking/pause`（`{ minutes?: number, until_ts?: string }`；都不填=手动暂停）
 - `POST /tracking/resume`
