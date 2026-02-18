@@ -82,6 +82,18 @@ class CoreClient {
     return data.map((e) => EventRecord.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  Future<NowSnapshot> now({int limit = 200}) async {
+    final l = limit.clamp(1, 2000).toString();
+    final res = await http.get(_u("/now", {"limit": l}));
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = obj["data"] as Map<String, dynamic>?;
+    if (data == null) throw Exception("invalid_response");
+    return NowSnapshot.fromJson(data);
+  }
+
   Future<TrackingStatus> trackingStatus() async {
     final res = await http.get(_u("/tracking/status"));
     if (res.statusCode != 200) {
@@ -433,6 +445,61 @@ class EventRecord {
       entity: json["entity"] as String?,
       title: json["title"] as String?,
       activity: json["activity"] as String?,
+    );
+  }
+}
+
+class NowSnapshot {
+  NowSnapshot({
+    required this.latestEventId,
+    required this.appActive,
+    required this.tabFocus,
+    required this.tabAudio,
+    required this.tabAudioStop,
+    required this.appAudio,
+    required this.appAudioStop,
+    required this.latestTitles,
+  });
+
+  final int? latestEventId;
+  final EventRecord? appActive;
+  final EventRecord? tabFocus;
+  final EventRecord? tabAudio;
+  final EventRecord? tabAudioStop;
+  final EventRecord? appAudio;
+  final EventRecord? appAudioStop;
+  final Map<String, String> latestTitles; // key: "app|<entity>" or "domain|<hostname>"
+
+  factory NowSnapshot.fromJson(Map<String, dynamic> json) {
+    EventRecord? parseEvent(String key) {
+      final raw = json[key];
+      if (raw is Map<String, dynamic>) return EventRecord.fromJson(raw);
+      return null;
+    }
+
+    final titles = <String, String>{};
+    final rawTitles = json["latest_titles"];
+    if (rawTitles is Map<String, dynamic>) {
+      for (final e in rawTitles.entries) {
+        final k = e.key;
+        final v = e.value;
+        if (v is String) {
+          titles[k] = v;
+        } else if (v != null) {
+          titles[k] = v.toString();
+        }
+      }
+    }
+
+    return NowSnapshot(
+      latestEventId: json["latest_event_id"] as int?,
+      appActive: parseEvent("app_active"),
+      tabFocus: parseEvent("tab_focus"),
+      tabAudio: parseEvent("tab_audio"),
+      tabAudioStop: parseEvent("tab_audio_stop"),
+      appAudio: parseEvent("app_audio"),
+      appAudioStop: parseEvent("app_audio_stop"),
+      latestTitles: titles,
     );
   }
 }

@@ -699,42 +699,15 @@ class TodayScreenState extends State<TodayScreen> {
     if (_refreshingNow) return;
     _refreshingNow = true;
     try {
-      final ev = await widget.client.events(limit: 500);
-      final latestAnyId = ev.isEmpty ? null : ev.first.id;
-      EventRecord? latestApp;
-      EventRecord? latestTab;
-      EventRecord? latestAudio;
-      EventRecord? latestAudioStop;
-      EventRecord? latestAppAudio;
-      EventRecord? latestAppAudioStop;
-      final latestTitles = <String, String>{};
-      for (final e in ev) {
-        if (latestApp == null && e.event == "app_active") latestApp = e;
-        if (latestTab == null && e.event == "tab_active" && e.activity != "audio") latestTab = e;
-        if (latestAudio == null && e.event == "tab_active" && e.activity == "audio") latestAudio = e;
-        if (latestAudioStop == null && e.event == "tab_audio_stop") latestAudioStop = e;
-        if (latestAppAudio == null && e.event == "app_audio") latestAppAudio = e;
-        if (latestAppAudioStop == null && e.event == "app_audio_stop") latestAppAudioStop = e;
-
-        final title = (e.title ?? "").trim();
-        final entity = (e.entity ?? "").trim();
-        if (title.isNotEmpty && entity.isNotEmpty) {
-          if (e.event == "tab_active") {
-            latestTitles.putIfAbsent(_ruleKey("domain", entity.toLowerCase()), () => title);
-          } else if (e.event == "app_active") {
-            latestTitles.putIfAbsent(_ruleKey("app", entity), () => title);
-          }
-        }
-
-        if (latestApp != null &&
-            latestTab != null &&
-            latestAudio != null &&
-            latestAudioStop != null &&
-            latestAppAudio != null &&
-            latestAppAudioStop != null) {
-          break;
-        }
-      }
+      final snap = await widget.client.now();
+      final latestAnyId = snap.latestEventId;
+      final latestApp = snap.appActive;
+      final latestTab = snap.tabFocus;
+      final latestAudio = snap.tabAudio;
+      final latestAudioStop = snap.tabAudioStop;
+      final latestAppAudio = snap.appAudio;
+      final latestAppAudioStop = snap.appAudioStop;
+      final latestTitles = snap.latestTitles;
       if (!mounted) return;
       final now = DateTime.now();
       final anyChanged = latestAnyId != null && latestAnyId != _lastAnyEventId;

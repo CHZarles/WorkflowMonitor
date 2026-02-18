@@ -107,7 +107,7 @@ struct IngestEvent {
     extra: HashMap<String, Value>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct EventRecord {
     id: i64,
     ts: String,
@@ -127,6 +127,36 @@ struct EventsQuery {
 
 fn default_limit() -> usize {
     50
+}
+
+#[derive(Deserialize)]
+struct NowQuery {
+    #[serde(default = "default_now_limit")]
+    limit: usize,
+}
+
+fn default_now_limit() -> usize {
+    200
+}
+
+#[derive(Serialize)]
+struct NowSnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_event_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_active: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tab_focus: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tab_audio: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tab_audio_stop: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_audio: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_audio_stop: Option<EventRecord>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    latest_titles: HashMap<String, String>, // key: "app|<entity>" or "domain|<hostname>"
 }
 
 #[derive(Deserialize)]
@@ -376,6 +406,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/event", post(post_event).options(options_ok))
         .route("/events", get(get_events))
+        .route("/now", get(get_now))
         .route("/tracking/status", get(get_tracking_status))
         .route("/tracking/pause", post(post_tracking_pause).options(options_ok))
         .route("/tracking/resume", post(post_tracking_resume).options(options_ok))
@@ -697,6 +728,100 @@ async fn get_events(State(state): State<AppState>, Query(q): Query<EventsQuery>)
                 .into_response()
         }
     }
+}
+
+async fn get_now(State(state): State<AppState>, Query(q): Query<NowQuery>) -> Response {
+    let limit = q.limit.clamp(1, 2000);
+    let mut conn = state.conn.lock().await;
+    let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+
+    let events = match list_events(&mut conn, limit, &privacy) {
+        Ok(v) => v,
+        Err(err) => {
+            error!("list_events for /now failed: {err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "db_error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let latest_event_id = events.first().map(|e| e.id);
+    let mut app_active: Option<EventRecord> = None;
+    let mut tab_focus: Option<EventRecord> = None;
+    let mut tab_audio: Option<EventRecord> = None;
+    let mut tab_audio_stop: Option<EventRecord> = None;
+    let mut app_audio: Option<EventRecord> = None;
+    let mut app_audio_stop: Option<EventRecord> = None;
+
+    let mut latest_titles: HashMap<String, String> = HashMap::new();
+
+    for e in &events {
+        if app_active.is_none() && e.event == "app_active" {
+            app_active = Some(e.clone());
+        }
+        if tab_focus.is_none() && e.event == "tab_active" && e.activity.as_deref() != Some("audio") {
+            tab_focus = Some(e.clone());
+        }
+        if tab_audio.is_none() && e.event == "tab_active" && e.activity.as_deref() == Some("audio") {
+            tab_audio = Some(e.clone());
+        }
+        if tab_audio_stop.is_none() && e.event == "tab_audio_stop" {
+            tab_audio_stop = Some(e.clone());
+        }
+        if app_audio.is_none() && e.event == "app_audio" {
+            app_audio = Some(e.clone());
+        }
+        if app_audio_stop.is_none() && e.event == "app_audio_stop" {
+            app_audio_stop = Some(e.clone());
+        }
+
+        if let (Some(entity), Some(title)) = (e.entity.as_deref(), e.title.as_deref()) {
+            let ent = entity.trim();
+            let t = title.trim();
+            if !ent.is_empty() && !t.is_empty() {
+                if e.event == "tab_active" {
+                    latest_titles
+                        .entry(format!("domain|{}", ent.to_lowercase()))
+                        .or_insert_with(|| t.to_string());
+                } else if e.event == "app_active" {
+                    latest_titles
+                        .entry(format!("app|{}", ent))
+                        .or_insert_with(|| t.to_string());
+                }
+            }
+        }
+
+        if app_active.is_some()
+            && tab_focus.is_some()
+            && tab_audio.is_some()
+            && tab_audio_stop.is_some()
+            && app_audio.is_some()
+            && app_audio_stop.is_some()
+            && latest_titles.len() >= 64
+        {
+            break;
+        }
+    }
+
+    Json(OkResponse {
+        ok: true,
+        data: Some(NowSnapshot {
+            latest_event_id,
+            app_active,
+            tab_focus,
+            tab_audio,
+            tab_audio_stop,
+            app_audio,
+            app_audio_stop,
+            latest_titles,
+        }),
+    })
+    .into_response()
 }
 
 async fn get_tracking_status(State(state): State<AppState>) -> Response {
