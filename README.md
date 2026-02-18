@@ -49,7 +49,7 @@ android/        Android Compose 原型（已不作为主路径）
 
 ## Quickstart（先把链路跑通）
 ### 方案 A（WSL 也能跑通：推荐）
-1. 在 WSL 启动 Core：`cargo run -p recorder_core -- --listen 127.0.0.1:17600`
+1. 在 WSL 启动 Core：`bash dev/run-core.sh 127.0.0.1:17600`（等价于 `cargo run -p recorder_core -- --listen 127.0.0.1:17600`）
 2. 在 Windows 浏览器加载 `extension/`（解压加载），popup 点击 `Test /health` 应显示 `OK`
 3. 随便打开/切换几个网页 tab：访问 `http://127.0.0.1:17600/events` 能看到域名事件
 

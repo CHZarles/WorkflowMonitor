@@ -34,6 +34,32 @@ node dev/sync-to-windows.mjs /mnt/c/src/RecorderPhone
 
 ---
 
+## 1.5) 一键启动（推荐）
+
+你可以用仓库里的脚本把“Core / UI / Collector”快速拉起来：
+
+在 **WSL** 启动 Core：
+```bash
+cd /home/charles/RecorderPhone
+bash dev/run-core.sh 127.0.0.1:17600
+```
+
+在 **Windows PowerShell** 启动 UI（会自动 overlay 模板 UI + `flutter pub get`）：
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\run-ui.ps1
+```
+
+在 **Windows PowerShell** 启动 Windows Collector（会先 build，再运行；可选发送窗口标题）：
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\run-collector.ps1 -CoreUrl http://127.0.0.1:17600 -SendTitle
+```
+
+> 说明：Collector 的 `--send-title` 只有在 Core 开启 L2（Store titles）时才会被落库；否则会被 Core 丢弃。
+
+---
+
 ## 2) 把模板 UI 覆盖到 Windows 的 Flutter 工程（每次 UI 改动后做）
 
 在 **Windows PowerShell** 执行（可整段复制）：

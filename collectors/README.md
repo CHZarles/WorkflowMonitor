@@ -17,3 +17,9 @@ rustup update stable
 ```
 
 > WSL/Linux 下不需要/也不能运行该采集器。
+
+## 一键运行（Windows PowerShell）
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\run-collector.ps1 -CoreUrl http://127.0.0.1:17600 -SendTitle
+```
