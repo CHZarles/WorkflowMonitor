@@ -191,15 +191,21 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
 
         if args.track_audio {
             let preferred_pid = last_audio.as_ref().map(|a| a.pid);
+            let mut audio_poll_failed = false;
             let audio = match active_audio_app(preferred_pid) {
                 Ok(v) => v,
                 Err(e) => {
+                    // Important: do NOT emit app_audio_stop on a transient polling error.
+                    // Otherwise Now/Timeline will flicker and falsely end an ongoing audio session.
                     error!("audio poll failed: {e}");
+                    audio_poll_failed = true;
                     None
                 }
             };
 
-            if let Some(key) = audio {
+            if audio_poll_failed {
+                // Keep previous state until the next successful poll.
+            } else if let Some(key) = audio {
                 let due_heartbeat =
                     last_audio_sent_at.elapsed() >= Duration::from_secs(args.heartbeat_seconds);
                 if last_audio
@@ -208,6 +214,13 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
                     != Some((key.pid, key.app.as_str()))
                     || due_heartbeat
                 {
+                    if last_audio
+                        .as_ref()
+                        .map(|k| (k.pid, k.app.as_str()))
+                        != Some((key.pid, key.app.as_str()))
+                    {
+                        info!("audio app changed: {} (pid {})", key.app, key.pid);
+                    }
                     let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
                     let payload = AppAudioEvent {
                         v: 1,
@@ -232,6 +245,7 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
                 }
             } else if let Some(prev) = last_audio.take() {
                 // Explicit stop marker so Core/UI can end background audio immediately.
+                info!("audio app stopped: {} (pid {})", prev.app, prev.pid);
                 let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
                 let payload = AppAudioEvent {
                     v: 1,
@@ -342,7 +356,10 @@ async fn maybe_notify_due_review_block(
     #[derive(serde::Deserialize, Clone)]
     struct TopItem {
         kind: String,
-        name: String,
+        #[serde(default, alias = "name")]
+        entity: String,
+        #[serde(default)]
+        title: Option<String>,
         seconds: i64,
     }
 
@@ -375,12 +392,31 @@ async fn maybe_notify_due_review_block(
     }
 
     fn display_top_name(it: &TopItem) -> String {
-        let raw = it.name.trim();
+        if it.kind == "domain" {
+            let title = it.title.as_deref().unwrap_or("").trim();
+            let domain = it.entity.trim();
+            if !title.is_empty() && !domain.is_empty() && domain != "__hidden__" {
+                return format!("{title} ({domain})");
+            }
+            if !title.is_empty() {
+                return title.to_string();
+            }
+            if domain == "__hidden__" {
+                return "(hidden)".to_string();
+            }
+            return if domain.is_empty() {
+                "(unknown)".to_string()
+            } else {
+                domain.to_string()
+            };
+        }
+
+        let raw = it.entity.trim();
+        if raw == "__hidden__" {
+            return "(hidden)".to_string();
+        }
         if raw.is_empty() {
             return "(unknown)".to_string();
-        }
-        if it.kind != "app" && !raw.contains('\\') && !raw.contains('/') && !raw.starts_with("pid:") {
-            return raw.to_string();
         }
         let base = raw.split(|c| c == '\\' || c == '/').last().unwrap_or(raw);
         let lower = base.to_lowercase();
