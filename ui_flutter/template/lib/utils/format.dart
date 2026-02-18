@@ -55,14 +55,17 @@ String? extractVscodeWorkspace(String windowTitle) {
 }
 
 String displayTopItemName(TopItem it) {
-  final raw = it.name;
   final kind = it.kind;
-  if (raw.trim() == "__hidden__") return "(hidden)";
-  final isApp = kind == "app" || raw.contains("\\") || raw.contains("/") || raw.startsWith("pid:");
-  if (!isApp) return raw;
-  final base = raw.split(RegExp(r"[\\/]+")).last;
-  if (base.toLowerCase().endsWith(".exe")) {
-    return base.substring(0, base.length - 4);
+  final entity = it.entity.trim();
+  if (entity == "__hidden__") return "(hidden)";
+
+  if (kind == "domain") {
+    final domain = entity.toLowerCase();
+    final rawTitle = (it.title ?? "").trim();
+    final t = rawTitle.isEmpty ? "" : normalizeWebTitle(domain, rawTitle);
+    if (t.isNotEmpty) return t;
+    return displayEntity(domain);
   }
-  return base;
+
+  return displayEntity(entity);
 }

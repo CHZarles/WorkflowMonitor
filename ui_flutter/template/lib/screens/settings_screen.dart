@@ -47,6 +47,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _rulesError;
   List<PrivacyRule> _rules = const [];
 
+  bool _nowLoading = false;
+  String? _nowError;
+  NowSnapshot? _now;
+
   bool _eventsLoading = false;
   String? _eventsError;
   List<EventRecord> _events = const [];
@@ -90,7 +94,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _refreshAll() async {
-    await Future.wait([_checkHealth(), _loadCoreSettings(), _loadRules(), _loadEvents()]);
+    await Future.wait([_checkHealth(), _loadCoreSettings(), _loadRules(), _loadNow(), _loadEvents()]);
   }
 
   Future<void> _checkHealth() async {
@@ -264,6 +268,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
     } finally {
       if (mounted) setState(() => _eventsLoading = false);
+    }
+  }
+
+  Future<void> _loadNow() async {
+    setState(() {
+      _nowLoading = true;
+      _nowError = null;
+    });
+    try {
+      final snap = await widget.client.now(limit: 400);
+      if (!mounted) return;
+      setState(() => _now = snap);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _nowError = e.toString();
+        _now = null;
+      });
+    } finally {
+      if (mounted) setState(() => _nowLoading = false);
     }
   }
 
@@ -658,26 +682,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.all(RecorderTokens.space2),
             child: Builder(
               builder: (context) {
-                if (_eventsLoading && _events.isEmpty) {
+                if (_nowLoading && _now == null) {
                   return const Padding(
                     padding: EdgeInsets.all(RecorderTokens.space4),
                     child: Center(child: CircularProgressIndicator()),
                   );
                 }
 
+                final snap = _now;
+                final usingFallbackEvents = snap == null;
+
                 EventRecord? lastTabFocus;
-                for (final e in _events) {
-                  if (e.source == "browser_extension" && e.event == "tab_active" && e.activity != "audio") {
-                    lastTabFocus = e;
-                    break;
+                EventRecord? lastTabAudio;
+                EventRecord? lastTabAudioStop;
+                EventRecord? lastApp;
+                EventRecord? lastAppAudio;
+                EventRecord? lastAppAudioStop;
+                EventRecord? lastAny;
+
+                if (snap != null) {
+                  lastTabFocus = snap.tabFocus;
+                  lastTabAudio = snap.tabAudio;
+                  lastTabAudioStop = snap.tabAudioStop;
+                  lastApp = snap.appActive;
+                  lastAppAudio = snap.appAudio;
+                  lastAppAudioStop = snap.appAudioStop;
+                  lastAny = snap.latestEvent;
+                } else {
+                  if (_eventsLoading && _events.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.all(RecorderTokens.space4),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
                   }
+
+                  for (final e in _events) {
+                    if (e.source == "browser_extension" && e.event == "tab_active" && e.activity != "audio") {
+                      lastTabFocus = e;
+                      break;
+                    }
+                  }
+                  lastTabAudio = _latestEvent(event: "tab_active", source: "browser_extension", activity: "audio");
+                  lastTabAudioStop = _latestEvent(event: "tab_audio_stop", source: "browser_extension");
+                  lastApp = _latestEvent(event: "app_active", source: "windows_collector");
+                  lastAppAudio = _latestEvent(event: "app_audio", source: "windows_collector");
+                  lastAppAudioStop = _latestEvent(event: "app_audio_stop", source: "windows_collector");
+                  lastAny = _events.isEmpty ? null : _events.first;
                 }
-                final lastTabAudio = _latestEvent(event: "tab_active", source: "browser_extension", activity: "audio");
-                final lastTabAudioStop = _latestEvent(event: "tab_audio_stop", source: "browser_extension");
-                final lastApp = _latestEvent(event: "app_active", source: "windows_collector");
-                final lastAppAudio = _latestEvent(event: "app_audio", source: "windows_collector");
-                final lastAppAudioStop = _latestEvent(event: "app_audio_stop", source: "windows_collector");
-                final lastAny = _events.isEmpty ? null : _events.first;
 
                 Widget tile({
                   required String title,
@@ -728,6 +779,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 return Column(
                   children: [
+                    if (_nowError != null && snap == null)
+                      Padding(
+                        padding: const EdgeInsets.all(RecorderTokens.space2),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                            const SizedBox(width: RecorderTokens.space1),
+                            Expanded(
+                              child: Text(
+                                (_nowError ?? "").contains("http_404")
+                                    ? "Tip: this Core does not implement /now. Restart recorder_core and refresh."
+                                    : "Now endpoint error: $_nowError${usingFallbackEvents ? \" (fallback to /events)\" : \"\"}",
+                                style: Theme.of(context).textTheme.labelMedium,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     tile(
                       title: "Browser tab (focus)",
                       e: lastTabFocus,

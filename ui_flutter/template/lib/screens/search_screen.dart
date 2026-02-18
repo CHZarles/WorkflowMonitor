@@ -352,7 +352,8 @@ class SearchScreenState extends State<SearchScreen> {
     for (final it in b.topItems) {
       final name = displayTopItemName(it).toLowerCase();
       if (name.contains(target)) return true;
-      if (it.name.toLowerCase().contains(target)) return true;
+      if (it.entity.toLowerCase().contains(target)) return true;
+      if ((it.title ?? "").toLowerCase().contains(target)) return true;
     }
 
     final preview = _previewFocusByBlockId[b.id];

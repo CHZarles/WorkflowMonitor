@@ -340,16 +340,24 @@ class TimelineSegment {
 }
 
 class TopItem {
-  TopItem({required this.kind, required this.name, required this.seconds});
+  TopItem({
+    required this.kind,
+    required this.entity,
+    required this.title,
+    required this.seconds,
+  });
 
   final String kind; // "app" | "domain" | "unknown"
-  final String name;
+  final String entity; // app id or hostname
+  final String? title; // tab/window title (optional)
   final int seconds;
 
   factory TopItem.fromJson(Map<String, dynamic> json) {
+    final rawEntity = (json["entity"] as String?) ?? (json["name"] as String?) ?? "";
     return TopItem(
       kind: (json["kind"] as String?) ?? "unknown",
-      name: json["name"] as String,
+      entity: rawEntity,
+      title: json["title"] as String?,
       seconds: json["seconds"] as int,
     );
   }
@@ -452,6 +460,7 @@ class EventRecord {
 class NowSnapshot {
   NowSnapshot({
     required this.latestEventId,
+    required this.latestEvent,
     required this.appActive,
     required this.tabFocus,
     required this.tabAudio,
@@ -462,6 +471,7 @@ class NowSnapshot {
   });
 
   final int? latestEventId;
+  final EventRecord? latestEvent;
   final EventRecord? appActive;
   final EventRecord? tabFocus;
   final EventRecord? tabAudio;
@@ -493,6 +503,7 @@ class NowSnapshot {
 
     return NowSnapshot(
       latestEventId: json["latest_event_id"] as int?,
+      latestEvent: parseEvent("latest_event"),
       appActive: parseEvent("app_active"),
       tabFocus: parseEvent("tab_focus"),
       tabAudio: parseEvent("tab_audio"),

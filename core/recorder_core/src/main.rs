@@ -144,6 +144,8 @@ struct NowSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     latest_event_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    latest_event: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     app_active: Option<EventRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tab_focus: Option<EventRecord>,
@@ -239,7 +241,9 @@ struct WipeAllResult {
 #[derive(Clone, Serialize)]
 struct TopItem {
     kind: String,
-    name: String,
+    entity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
     seconds: i64,
 }
 
@@ -751,6 +755,7 @@ async fn get_now(State(state): State<AppState>, Query(q): Query<NowQuery>) -> Re
     };
 
     let latest_event_id = events.first().map(|e| e.id);
+    let latest_event = events.first().cloned();
     let mut app_active: Option<EventRecord> = None;
     let mut tab_focus: Option<EventRecord> = None;
     let mut tab_audio: Option<EventRecord> = None;
@@ -812,6 +817,7 @@ async fn get_now(State(state): State<AppState>, Query(q): Query<NowQuery>) -> Re
         ok: true,
         data: Some(NowSnapshot {
             latest_event_id,
+            latest_event,
             app_active,
             tab_focus,
             tab_audio,
@@ -2876,17 +2882,11 @@ fn attach_background_audio(
         }
         let mut items: Vec<TopItem> = per_block[i]
             .iter()
-            .map(|(k, sec)| {
-                let name = if k.kind == EntityKind::Domain {
-                    k.title.clone().unwrap_or_else(|| k.entity.clone())
-                } else {
-                    k.entity.clone()
-                };
-                TopItem {
-                    kind: k.kind.as_str().to_string(),
-                    name,
-                    seconds: *sec,
-                }
+            .map(|(k, sec)| TopItem {
+                kind: k.kind.as_str().to_string(),
+                entity: k.entity.clone(),
+                title: if k.kind == EntityKind::Domain { k.title.clone() } else { None },
+                seconds: *sec,
             })
             .collect();
         items.sort_by(|a, b| b.seconds.cmp(&a.seconds));
@@ -2908,17 +2908,11 @@ fn finalize_block(
 
     let mut items: Vec<TopItem> = bucket
         .iter()
-        .map(|(k, v)| {
-            let name = if k.kind == EntityKind::Domain {
-                k.title.clone().unwrap_or_else(|| k.entity.clone())
-            } else {
-                k.entity.clone()
-            };
-            TopItem {
-                kind: k.kind.as_str().to_string(),
-                name,
-                seconds: *v,
-            }
+        .map(|(k, v)| TopItem {
+            kind: k.kind.as_str().to_string(),
+            entity: k.entity.clone(),
+            title: if k.kind == EntityKind::Domain { k.title.clone() } else { None },
+            seconds: *v,
         })
         .collect();
     items.sort_by(|a, b| b.seconds.cmp(&a.seconds));
@@ -3004,6 +2998,25 @@ fn get_review(conn: &mut Connection, block_id: &str) -> rusqlite::Result<Option<
 }
 
 fn export_markdown(date: &str, blocks: &[BlockSummary], tz_offset: time::UtcOffset) -> String {
+    fn top_label(it: &TopItem) -> String {
+        let entity = it.entity.trim();
+        if entity.is_empty() {
+            return "(unknown)".to_string();
+        }
+        if entity == "__hidden__" {
+            return "(hidden)".to_string();
+        }
+        if it.kind == "domain" {
+            if let Some(title) = it.title.as_deref() {
+                let t = title.trim();
+                if !t.is_empty() {
+                    return format!("{t} ({entity})");
+                }
+            }
+        }
+        entity.to_string()
+    }
+
     let mut out = String::new();
     out.push_str(&format!("# {date}\n\n"));
 
@@ -3017,7 +3030,7 @@ fn export_markdown(date: &str, blocks: &[BlockSummary], tz_offset: time::UtcOffs
             out.push_str(
                 &b.top_items
                     .iter()
-                    .map(|it| format!("{} {}", it.name, fmt_duration(it.seconds)))
+                    .map(|it| format!("{} {}", top_label(it), fmt_duration(it.seconds)))
                     .collect::<Vec<_>>()
                     .join(" · "),
             );
@@ -3063,6 +3076,25 @@ fn export_markdown(date: &str, blocks: &[BlockSummary], tz_offset: time::UtcOffs
 }
 
 fn export_csv(date: &str, blocks: &[BlockSummary]) -> String {
+    fn top_label(it: &TopItem) -> String {
+        let entity = it.entity.trim();
+        if entity.is_empty() {
+            return "(unknown)".to_string();
+        }
+        if entity == "__hidden__" {
+            return "(hidden)".to_string();
+        }
+        if it.kind == "domain" {
+            if let Some(title) = it.title.as_deref() {
+                let t = title.trim();
+                if !t.is_empty() {
+                    return format!("{t} ({entity})");
+                }
+            }
+        }
+        entity.to_string()
+    }
+
     let mut out = String::new();
     out.push_str("date,block_id,start_ts,end_ts,total_seconds,top1_name,top1_seconds,top2_name,top2_seconds,top3_name,top3_seconds,top4_name,top4_seconds,top5_name,top5_seconds,skipped,skip_reason,doing,output,next,tags,review_updated_at\n");
 
@@ -3089,7 +3121,7 @@ fn export_csv(date: &str, blocks: &[BlockSummary]) -> String {
 
         for i in 0..5 {
             if let Some(it) = b.top_items.get(i) {
-                row.push(csv_escape(&it.name));
+                row.push(csv_escape(&top_label(it)));
                 row.push(it.seconds.to_string());
             } else {
                 row.push(String::new());
@@ -3230,10 +3262,10 @@ mod tests {
         let b = &blocks[0];
         assert_eq!(b.total_seconds, 5 * 60);
 
-        let sec = |name: &str| {
+        let sec = |entity: &str| {
             b.top_items
                 .iter()
-                .find(|it| it.name == name)
+                .find(|it| it.entity == entity)
                 .map(|it| it.seconds)
                 .unwrap_or(0)
         };
@@ -3284,19 +3316,20 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         let b = &blocks[0];
 
-        let sec_domain = |name: &str| {
+        let sec_domain = |title: &str| {
             b.top_items
                 .iter()
-                .find(|it| it.kind == "domain" && it.name == name)
+                .find(|it| {
+                    it.kind == "domain"
+                        && it.entity == "www.youtube.com"
+                        && it.title.as_deref() == Some(title)
+                })
                 .map(|it| it.seconds)
                 .unwrap_or(0)
         };
 
         assert_eq!(sec_domain("Video A"), 60);
         assert_eq!(sec_domain("Video B"), 60);
-        assert!(
-            b.top_items.iter().all(|it| it.name != "www.youtube.com"),
-            "domain should be replaced by normalized title when available"
-        );
+        assert!(b.top_items.iter().any(|it| it.entity == "www.youtube.com"));
     }
 }

@@ -87,14 +87,23 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
   }
 
   String _kindForTopItem(TopItem it) {
-    return (it.kind == "domain" || it.kind == "app") ? it.kind : _guessKind(it.name);
+    return (it.kind == "domain" || it.kind == "app") ? it.kind : _guessKind(it.entity);
   }
 
   _BlockStatItem _statFromTopItem(TopItem it) {
     final kind = _kindForTopItem(it);
-    final entity = kind == "domain" ? it.name.toLowerCase() : it.name;
-    final label = kind == "app" ? displayTopItemName(it) : entity;
-    return _BlockStatItem(kind: kind, entity: entity, label: label, subtitle: null, seconds: it.seconds);
+    if (kind == "domain") {
+      final domain = it.entity.trim().toLowerCase();
+      final rawTitle = (it.title ?? "").trim();
+      final title = rawTitle.isEmpty ? "" : normalizeWebTitle(domain, rawTitle);
+      final label = title.isEmpty ? displayEntity(domain) : title;
+      final subtitle = title.isEmpty ? null : displayEntity(domain);
+      return _BlockStatItem(kind: kind, entity: domain, label: label, subtitle: subtitle, seconds: it.seconds);
+    }
+
+    final appEntity = it.entity.trim();
+    final label = displayEntity(appEntity);
+    return _BlockStatItem(kind: kind, entity: appEntity, label: label, subtitle: null, seconds: it.seconds);
   }
 
   Future<void> _loadRules() async {
