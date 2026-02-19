@@ -55,6 +55,29 @@ class EntityAvatar extends StatelessWidget {
     return Uri.https("www.google.com", "/s2/favicons", {"domain": d, "sz": "64"}).toString();
   }
 
+  String? _duckDuckGoFaviconUrlForDomain(String rawDomain) {
+    final d = rawDomain.trim().toLowerCase();
+    if (d.isEmpty) return null;
+    if (d == "__hidden__") return null;
+    if (d.contains(RegExp(r"[\\/\s]"))) return null;
+    if (d.contains(":")) return null;
+    if (!d.contains(".")) return null;
+    if (_isIpLike(d)) return null;
+    return Uri(scheme: "https", host: "icons.duckduckgo.com", path: "/ip3/$d.ico").toString();
+  }
+
+  String? _wwwFaviconUrlForDomain(String rawDomain) {
+    final d = rawDomain.trim().toLowerCase();
+    if (d.isEmpty) return null;
+    if (d == "__hidden__") return null;
+    if (d.contains(RegExp(r"[\\/\s]"))) return null;
+    if (d.contains(":")) return null;
+    if (!d.contains(".")) return null;
+    if (_isIpLike(d)) return null;
+    if (d.startsWith("www.")) return null;
+    return Uri(scheme: "https", host: "www.$d", path: "/favicon.ico").toString();
+  }
+
   IconData? _fallbackIconForDomain(String rawDomain) {
     final d = rawDomain.trim().toLowerCase();
     if (d.isEmpty) return null;
@@ -91,7 +114,9 @@ class EntityAvatar extends StatelessWidget {
     final text = kind == "domain" ? _firstGlyph(entity) : _firstGlyph(label);
 
     final faviconUrl = kind == "domain" && !isHidden ? _faviconUrlForDomain(entity) : null;
-    final faviconUrlFallback = kind == "domain" && !isHidden ? _googleFaviconUrlForDomain(entity) : null;
+    final faviconUrlWww = kind == "domain" && !isHidden ? _wwwFaviconUrlForDomain(entity) : null;
+    final faviconUrlGoogle = kind == "domain" && !isHidden ? _googleFaviconUrlForDomain(entity) : null;
+    final faviconUrlDuck = kind == "domain" && !isHidden ? _duckDuckGoFaviconUrlForDomain(entity) : null;
     final domainFallbackIcon = kind == "domain" && !isHidden ? _fallbackIconForDomain(entity) : null;
 
     Widget fallbackWidget() {
@@ -101,20 +126,28 @@ class EntityAvatar extends StatelessWidget {
       return _letterFallback(context, text, fg);
     }
 
-    Widget buildNetworkImage(String url, {String? fallbackUrl}) {
+    Widget buildNetworkImageChain(List<String> urls, int i) {
+      if (i >= urls.length) return fallbackWidget();
+      final url = urls[i];
       return Image.network(
         url,
         width: size,
         height: size,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) {
-          if (fallbackUrl != null && fallbackUrl.trim().isNotEmpty) {
-            return buildNetworkImage(fallbackUrl);
-          }
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
           return fallbackWidget();
         },
+        errorBuilder: (_, __, ___) => buildNetworkImageChain(urls, i + 1),
       );
     }
+
+    final faviconCandidates = <String>[
+      if (faviconUrl != null) faviconUrl,
+      if (faviconUrlWww != null) faviconUrlWww,
+      if (faviconUrlGoogle != null) faviconUrlGoogle,
+      if (faviconUrlDuck != null) faviconUrlDuck,
+    ];
 
     return SizedBox(
       width: size,
@@ -128,9 +161,9 @@ class EntityAvatar extends StatelessWidget {
         child: Center(
           child: showIcon
               ? Icon(effectiveIcon, size: (size * 0.58).clamp(14, 18).toDouble(), color: fg)
-              : (faviconUrl != null
+              : (faviconCandidates.isNotEmpty
                   ? ClipOval(
-                      child: buildNetworkImage(faviconUrl, fallbackUrl: faviconUrlFallback),
+                      child: buildNetworkImageChain(faviconCandidates, 0),
                     )
                   : fallbackWidget()),
         ),
