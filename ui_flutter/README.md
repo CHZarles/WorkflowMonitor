@@ -50,6 +50,17 @@ flutter run -d windows
 - Review：按天加载 blocks（时间轴）并支持关键词过滤；点开 block 进入详情（TopN 条形图 + Tags + 黑名单 + 删除本段 + Background audio；开启 L2 titles 后可按 tab 标题/VSCode workspace 更细粒度展示）
 - Settings：Server URL、隐私规则、导出、Core settings、Danger zone
 
+## “打包模式”（推荐的桌面应用形态）
+
+UI 内置的 `Desktop agent (Windows)` 现在会 **优先使用“打包在应用目录旁”的二进制** 来启动 Core/Collector（不依赖 repoRoot、不依赖 PowerShell 脚本）。
+
+约定：
+- 把 `recorder_core.exe` 与 `windows_collector.exe` 放到 `recorderphone_ui.exe` 同目录，或放到同目录下的 `bin/`。
+- UI 会用 `Server URL` 的 host/port（默认 `http://127.0.0.1:17600`）启动 Core，并把数据库写到：
+  - `%LOCALAPPDATA%\\RecorderPhone\\recorder-core.db`（以及 `%LOCALAPPDATA%\\RecorderPhone\\agent-pids.json`）
+
+开发期想快速模拟“打包模式”，可以在 Windows 先 build Rust release，然后把 exe 拷到 Flutter Windows runner 的目录里（例如 `build\\windows\\x64\\runner\\Release\\`）再运行 UI。
+
 ### 如果你在用 `dev/sync-to-windows.mjs`
 该脚本会用 rsync 镜像到 Windows（带 `--delete`）。我们已默认保护 `recorderphone_ui/` 不会被删除；如果你在更新前已经启动过 sync，请重启该脚本后再创建 Flutter 工程。
 

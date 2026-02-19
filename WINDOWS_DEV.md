@@ -203,3 +203,13 @@ powershell -ExecutionPolicy Bypass -File .\dev\install-recorderphone-protocol.ps
 自检：
 - `Win + R` 输入：`recorderphone://review`（应能启动 RecorderPhone UI）
  - Toast 的按钮（如果开启了 `windows_collector --review-notify`）：`Quick Review` / `Skip` / `Pause 15m` 都会通过 `recorderphone://...` 深链触发
+
+---
+
+## 7) 打包模式（桌面应用形态）
+
+当你把 `recorder_core.exe` 与 `windows_collector.exe` **打包在 UI 旁边**（同目录或 `bin/`）时，UI 的 `Settings → Desktop agent (Windows)` 会优先使用这些二进制启动 Core/Collector（不依赖 repoRoot、不依赖 PowerShell）。
+
+数据落盘位置：
+- DB：`%LOCALAPPDATA%\\RecorderPhone\\recorder-core.db`
+- PID：`%LOCALAPPDATA%\\RecorderPhone\\agent-pids.json`
