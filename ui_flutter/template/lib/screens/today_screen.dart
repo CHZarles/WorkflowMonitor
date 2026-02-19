@@ -1271,6 +1271,9 @@ class TodayScreenState extends State<TodayScreen> {
     final usingTab = browserFocused ? tab : (showAudio ? audio : null);
     final usingTabIcon = browserFocused ? Icons.public : Icons.headphones;
 
+    final usingTabMissingTitle =
+        usingTab != null && usingTab.event == "tab_active" && ((usingTab.title ?? "").trim().isEmpty);
+
     if (app == null && usingTab == null && !(showAppAudio && appAudio != null)) {
       return Card(
         child: Padding(
@@ -1360,6 +1363,16 @@ class TodayScreenState extends State<TodayScreen> {
                   final title = (_coreStoreTitles && domain.isNotEmpty) ? normalizeWebTitle(domain, rawTitle) : rawTitle;
                   _openReviewForEntity(kind: "domain", entity: usingTab.entity, label: title.isEmpty ? null : title);
                 },
+              ),
+            if (usingTabMissingTitle)
+              Padding(
+                padding: const EdgeInsets.only(left: 44, top: 4),
+                child: Text(
+                  _coreStoreTitles
+                      ? "Tip: enable “Send tab title” in the browser extension popup, then click “Force send”."
+                      : "Tip: titles are OFF (L1). Enable L2 in Settings to see tab titles (e.g. YouTube video names).",
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
               ),
             if (showAppAudio && !hideAppAudio)
               row(

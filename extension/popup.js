@@ -32,6 +32,14 @@ function renderStatus(status) {
     line.textContent = "(no data yet)";
     return;
   }
+
+  const lastOk = typeof status.lastOkTs === "string" ? status.lastOkTs : "";
+  const lastAttempt = typeof status.lastAttemptTs === "string" ? status.lastAttemptTs : "";
+  const consecutiveErrors =
+    typeof status.consecutiveErrors === "number" && Number.isFinite(status.consecutiveErrors)
+      ? status.consecutiveErrors
+      : 0;
+
   if (status.ok) {
     const last = status.lastSent || {};
     const parts = [];
@@ -43,9 +51,20 @@ function renderStatus(status) {
       const t = title.length > 48 ? title.slice(0, 45) + "…" : title;
       parts.push(`title=${t}`);
     }
-    line.textContent = `${status.ts}  |  sent  |  ${parts.length ? parts.join("  ") : "ok"}`;
+
+    const extra = [];
+    if (lastOk) extra.push(`last_ok=${lastOk}`);
+    if (consecutiveErrors > 0) extra.push(`errors=${consecutiveErrors}`);
+    line.textContent = `${status.ts}  |  sent  |  ${parts.length ? parts.join("  ") : "ok"}${
+      extra.length ? `  |  ${extra.join("  ")}` : ""
+    }`;
   } else {
-    line.textContent = `${status.ts}  |  error  |  ${status.error || "unknown"}`;
+    const err = status.error || status.lastError || "unknown";
+    const extra = [];
+    if (consecutiveErrors > 0) extra.push(`errors=${consecutiveErrors}`);
+    if (lastAttempt) extra.push(`last_try=${lastAttempt}`);
+    if (lastOk) extra.push(`last_ok=${lastOk}`);
+    line.textContent = `${status.ts}  |  error  |  ${err}${extra.length ? `  |  ${extra.join("  ")}` : ""}`;
   }
 }
 

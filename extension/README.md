@@ -9,6 +9,7 @@
 
 说明：
 - 扩展的 “Send tab title” 只决定“是否发送”。Core 侧还可以通过 `store_titles` 决定是否真正落库（默认更严格，避免误采集）。
+- 如果你想在 UI 里把 `youtube.com` 拆成“不同视频标题”，需要 **Core 允许存标题（L2）** + **扩展发送标题** 两者都开启；否则只能看到域名粒度（这是隐私策略的一部分）。
 
 ## 安装（Chrome / Edge）
 1. 打开扩展管理页
@@ -23,6 +24,20 @@
 - 打开 popup 点击 `Test /health` 应显示 OK
 - 如果状态不更新/怀疑 service worker 没醒：点一次 `Force send`
 - 打开任意网页并切换 tab：Core 的 `GET /events` 会出现域名事件
+
+### 常见问题
+**Q：为什么 Diagnostics 里 Browser tab 经常变“stale”，我 reload 扩展就好了？**  
+A：多数情况下并不需要 reload。优先按下面顺序排查：
+1) 打开扩展 popup，看 `Last status` 是否在持续更新（是否有 `error` / 连续错误次数）  
+2) 确认 `Server URL` 指向正在运行的 Core（`Test /health` 必须是 OK）  
+3) 点击一次 `Force send`（会立刻尝试发送当前 tab / audible tab）  
+4) 只有当 popup 里持续报错、且 `Force send` 也无效时，再考虑 reload 扩展/重启浏览器
+
+**Q：我想看 YouTube 视频标题，而不是只看到 youtube.com？**  
+A：需要两步都打开：
+- Core：Settings 里开启 `Store window/tab titles (L2)`  
+- 扩展：popup 里开启 `Send tab title (optional)`，然后点一次 `Force send`  
+> 注意：在你开启 L2 之前写入数据库的历史记录不会自动补标题；想“立刻看到效果”可以删除当天数据或全清后再试。
 
 ## 字段说明（Core 侧可见）
 - `event=tab_active`：域名级活跃 tab 事件

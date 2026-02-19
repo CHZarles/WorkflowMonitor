@@ -11,11 +11,25 @@ const STATE = {
   lastTabId: null,
   lastWindowId: null,
   lastActivity: null,
-  lastSentAtMs: 0
+  lastSentAtMs: 0,
+  lastAttemptAtMs: 0,
+  lastOkAtMs: 0,
+  consecutiveErrors: 0,
+  lastError: null,
+  lastErrorAtMs: 0
 };
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function msToIso(ms) {
+  if (!ms || ms <= 0) return null;
+  try {
+    return new Date(ms).toISOString();
+  } catch {
+    return null;
+  }
 }
 
 function getLastFocusedWindow() {
@@ -58,18 +72,47 @@ async function getSettings() {
 }
 
 async function setStatus(partial) {
-  await chrome.storage.local.set({ status: { ts: nowIso(), ...partial } });
+  const base = {
+    ts: nowIso(),
+    lastAttemptTs: msToIso(STATE.lastAttemptAtMs),
+    lastOkTs: msToIso(STATE.lastOkAtMs),
+    lastErrorTs: msToIso(STATE.lastErrorAtMs),
+    consecutiveErrors: STATE.consecutiveErrors,
+    lastError: STATE.lastError
+  };
+
+  await chrome.storage.local.set({ status: { ...base, ...partial } });
 }
 
 async function postEvent(serverUrl, payload) {
   const endpoint = serverUrl.replace(/\/$/, "") + "/event";
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    throw new Error(`http_${res.status}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5500);
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      throw new Error(`http_${res.status}`);
+    }
+  } catch (e) {
+    if (e && typeof e === "object" && e.name === "AbortError") {
+      throw new Error("timeout");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function ensureHeartbeatAlarm() {
+  try {
+    await chrome.alarms.create("heartbeat", { periodInMinutes: 1 });
+  } catch {
+    // ignore
   }
 }
 
@@ -91,14 +134,22 @@ async function maybeEmitAudioStop(settings, reason) {
   };
 
   try {
+    STATE.lastAttemptAtMs = Date.now();
     await postEvent(settings.serverUrl, payload);
     STATE.lastDomain = null;
     STATE.lastTabId = null;
     STATE.lastWindowId = null;
     STATE.lastActivity = null;
     STATE.lastSentAtMs = Date.now();
+    STATE.lastOkAtMs = Date.now();
+    STATE.consecutiveErrors = 0;
+    STATE.lastError = null;
+    STATE.lastErrorAtMs = 0;
     await setStatus({ ok: true, lastSent: payload, error: null });
   } catch (e) {
+    STATE.consecutiveErrors += 1;
+    STATE.lastError = String(e);
+    STATE.lastErrorAtMs = Date.now();
     await setStatus({ ok: false, error: String(e) });
   }
 }
@@ -106,6 +157,8 @@ async function maybeEmitAudioStop(settings, reason) {
 async function emitActiveTabEvent({ force = false } = {}) {
   const settings = await getSettings();
   if (!settings.enabled) return;
+
+  await ensureHeartbeatAlarm();
 
   const browserFocused = await isBrowserFocused();
 
@@ -173,14 +226,22 @@ async function emitActiveTabEvent({ force = false } = {}) {
   };
 
   try {
+    STATE.lastAttemptAtMs = Date.now();
     await postEvent(settings.serverUrl, payload);
     STATE.lastDomain = domain;
     STATE.lastTabId = tab.id;
     STATE.lastWindowId = tab.windowId;
     STATE.lastActivity = activity;
     STATE.lastSentAtMs = Date.now();
+    STATE.lastOkAtMs = Date.now();
+    STATE.consecutiveErrors = 0;
+    STATE.lastError = null;
+    STATE.lastErrorAtMs = 0;
     await setStatus({ ok: true, lastSent: payload, error: null });
   } catch (e) {
+    STATE.consecutiveErrors += 1;
+    STATE.lastError = String(e);
+    STATE.lastErrorAtMs = Date.now();
     await setStatus({ ok: false, error: String(e) });
   }
 }

@@ -3,6 +3,7 @@ import "package:flutter/services.dart";
 
 import "../api/core_client.dart";
 import "../theme/tokens.dart";
+import "../utils/format.dart";
 
 enum _PrivacyLevel { l1, l2, l3 }
 
@@ -199,7 +200,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       case _PrivacyLevel.l1:
         return "L1: Store only app/domain + duration. Titles and exe paths are dropped.";
       case _PrivacyLevel.l2:
-        return "L2: Also store window/tab titles (collectors/extensions must send them).";
+        return "L2: Also store window/tab titles (extension: enable Send tab title; collector: use --send-title). Old data won't be backfilled.";
       case _PrivacyLevel.l3:
         return "L3: Also store full exe path (high sensitivity).";
     }
@@ -730,6 +731,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   lastAny = _events.isEmpty ? null : _events.first;
                 }
 
+                bool isBrowserLabel(String label) {
+                  final v = label.trim().toLowerCase();
+                  return v == "chrome" || v == "msedge" || v == "edge" || v == "brave" || v == "vivaldi" || v == "opera" || v == "firefox";
+                }
+
+                final lastAppTs = lastApp == null ? null : _parseLocalTs(lastApp.ts);
+                final lastAppAge = lastAppTs == null ? null : DateTime.now().difference(lastAppTs);
+                final lastAppLabel = displayEntity(lastApp?.entity);
+                final appLooksLikeBrowser = lastApp != null && isBrowserLabel(lastAppLabel);
+                final appIsFresh = lastAppAge != null && lastAppAge.inMinutes < 3;
+                final browserLooksActive = appLooksLikeBrowser && appIsFresh;
+
+                final lastTabTs = lastTabFocus == null ? null : _parseLocalTs(lastTabFocus.ts);
+                final lastTabAge = lastTabTs == null ? null : DateTime.now().difference(lastTabTs);
+                final tabLooksStale = lastTabAge == null || lastTabAge.inMinutes >= 6;
+
                 Widget tile({
                   required String title,
                   required EventRecord? e,
@@ -797,19 +814,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ],
                         ),
                       ),
+                    if (browserLooksActive && (lastTabFocus == null || tabLooksStale))
+                      Padding(
+                        padding: const EdgeInsets.all(RecorderTokens.space2),
+                        child: Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded, size: 16, color: Theme.of(context).colorScheme.tertiary),
+                            const SizedBox(width: RecorderTokens.space1),
+                            const Expanded(
+                              child: Text(
+                                "Browser looks active, but tab tracking is stale.\nOpen the extension popup → check Enable tracking + Server URL, then click “Force send” (reload extension only if needed).",
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     tile(
                       title: "Browser tab (focus)",
                       e: lastTabFocus,
                       emptyHint: "No tab_active yet. Open the extension popup and ensure Enable tracking is ON.",
-                      missingTitleHint: _storeTitles ? "No title field. Enable “Send tab title”, then reload the extension." : null,
-                      staleHint: "This can be normal if you're not using the browser. Switch a tab to trigger a fresh event.",
+                      missingTitleHint: _storeTitles
+                          ? "No title field. Enable “Send tab title” in the extension, then click “Force send”."
+                          : "Titles are OFF (L1). Turn on “Store window/tab titles (L2)” below to see tab titles.",
+                      staleHint: browserLooksActive
+                          ? "If you’re using the browser right now, this should be fresh. Open the extension popup → Force send."
+                          : "This can be normal if you're not using the browser. Switch a tab to trigger a fresh event.",
                     ),
                     const Divider(height: 1),
                     tile(
                       title: "Browser tab (background audio)",
                       e: lastTabAudio ?? lastTabAudioStop,
                       emptyHint: "No background-audio tab yet. Enable “Track background audio” in the extension, then play audio with the browser in background.",
-                      missingTitleHint: _storeTitles ? "No title field. Enable “Send tab title”, then reload the extension." : null,
+                      missingTitleHint: _storeTitles
+                          ? "No title field. Enable “Send tab title” in the extension, then click “Force send”."
+                          : "Titles are OFF (L1). Turn on “Store window/tab titles (L2)” below to see tab titles.",
                       staleHint: "This only reports when the browser is not focused but an audible tab is playing.",
                     ),
                     const Divider(height: 1),
@@ -817,7 +857,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       title: "Windows app events",
                       e: lastApp,
                       emptyHint: "No app_active yet. Start windows_collector.exe and switch apps a few times.",
-                      missingTitleHint: _storeTitles ? "No title field. Start windows_collector with --send-title." : null,
+                      missingTitleHint: _storeTitles
+                          ? "No title field. Start windows_collector with --send-title."
+                          : "Titles are OFF (L1). Turn on “Store window/tab titles (L2)” below to see window titles/workspaces.",
                       staleHint: "If windows_collector isn't running, this will go stale. Restart it to resume events.",
                     ),
                     const Divider(height: 1),
