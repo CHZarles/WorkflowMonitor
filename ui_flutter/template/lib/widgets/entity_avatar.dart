@@ -32,6 +32,16 @@ class EntityAvatar extends StatelessWidget {
     return String.fromCharCode(code).toUpperCase();
   }
 
+  String? _faviconUrlForDomain(String rawDomain) {
+    final d = rawDomain.trim().toLowerCase();
+    if (d.isEmpty) return null;
+    if (d == "__hidden__") return null;
+    if (d.contains(RegExp(r"[\\/\s]"))) return null;
+    // Avoid IPv6 / ports; keep it conservative.
+    if (d.contains(":")) return null;
+    return Uri(scheme: "https", host: d, path: "/favicon.ico").toString();
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -53,6 +63,8 @@ class EntityAvatar extends StatelessWidget {
     final showIcon = effectiveIcon != null && (isHidden || kind == "app");
     final text = kind == "domain" ? _firstGlyph(entity) : _firstGlyph(label);
 
+    final faviconUrl = kind == "domain" && !isHidden ? _faviconUrlForDomain(entity) : null;
+
     return SizedBox(
       width: size,
       height: size,
@@ -65,16 +77,30 @@ class EntityAvatar extends StatelessWidget {
         child: Center(
           child: showIcon
               ? Icon(effectiveIcon, size: (size * 0.58).clamp(14, 18).toDouble(), color: fg)
-              : Text(
-                  text,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: fg,
-                        fontWeight: FontWeight.w700,
-                        height: 1,
+              : (faviconUrl != null
+                  ? ClipOval(
+                      child: Image.network(
+                        faviconUrl,
+                        width: size,
+                        height: size,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _letterFallback(context, text, fg),
                       ),
-                ),
+                    )
+                  : _letterFallback(context, text, fg)),
         ),
       ),
+    );
+  }
+
+  Widget _letterFallback(BuildContext context, String text, Color fg) {
+    return Text(
+      text,
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: fg,
+            fontWeight: FontWeight.w700,
+            height: 1,
+          ),
     );
   }
 }

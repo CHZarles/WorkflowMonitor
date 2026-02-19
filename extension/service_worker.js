@@ -19,6 +19,8 @@ const STATE = {
   lastErrorAtMs: 0
 };
 
+let _stateLoaded = false;
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -29,6 +31,50 @@ function msToIso(ms) {
     return new Date(ms).toISOString();
   } catch {
     return null;
+  }
+}
+
+async function ensureStateLoaded() {
+  if (_stateLoaded) return;
+  _stateLoaded = true;
+  try {
+    const stored = await chrome.storage.local.get("recorderState");
+    const s = stored?.recorderState;
+    if (!s || typeof s !== "object") return;
+
+    if (typeof s.lastDomain === "string") STATE.lastDomain = s.lastDomain;
+    if (typeof s.lastTabId === "number") STATE.lastTabId = s.lastTabId;
+    if (typeof s.lastWindowId === "number") STATE.lastWindowId = s.lastWindowId;
+    if (typeof s.lastActivity === "string") STATE.lastActivity = s.lastActivity;
+    if (typeof s.lastSentAtMs === "number") STATE.lastSentAtMs = s.lastSentAtMs;
+    if (typeof s.lastAttemptAtMs === "number") STATE.lastAttemptAtMs = s.lastAttemptAtMs;
+    if (typeof s.lastOkAtMs === "number") STATE.lastOkAtMs = s.lastOkAtMs;
+    if (typeof s.consecutiveErrors === "number") STATE.consecutiveErrors = s.consecutiveErrors;
+    if (typeof s.lastError === "string") STATE.lastError = s.lastError;
+    if (typeof s.lastErrorAtMs === "number") STATE.lastErrorAtMs = s.lastErrorAtMs;
+  } catch {
+    // ignore
+  }
+}
+
+async function persistState() {
+  try {
+    await chrome.storage.local.set({
+      recorderState: {
+        lastDomain: STATE.lastDomain,
+        lastTabId: STATE.lastTabId,
+        lastWindowId: STATE.lastWindowId,
+        lastActivity: STATE.lastActivity,
+        lastSentAtMs: STATE.lastSentAtMs,
+        lastAttemptAtMs: STATE.lastAttemptAtMs,
+        lastOkAtMs: STATE.lastOkAtMs,
+        consecutiveErrors: STATE.consecutiveErrors,
+        lastError: STATE.lastError,
+        lastErrorAtMs: STATE.lastErrorAtMs
+      }
+    });
+  } catch {
+    // ignore
   }
 }
 
@@ -117,6 +163,8 @@ async function ensureHeartbeatAlarm() {
 }
 
 async function maybeEmitAudioStop(settings, reason) {
+  await ensureStateLoaded();
+
   if (STATE.lastActivity !== "audio") return;
   if (!STATE.lastDomain) return;
 
@@ -145,16 +193,20 @@ async function maybeEmitAudioStop(settings, reason) {
     STATE.consecutiveErrors = 0;
     STATE.lastError = null;
     STATE.lastErrorAtMs = 0;
+    await persistState();
     await setStatus({ ok: true, lastSent: payload, error: null });
   } catch (e) {
     STATE.consecutiveErrors += 1;
     STATE.lastError = String(e);
     STATE.lastErrorAtMs = Date.now();
+    await persistState();
     await setStatus({ ok: false, error: String(e) });
   }
 }
 
 async function emitActiveTabEvent({ force = false } = {}) {
+  await ensureStateLoaded();
+
   const settings = await getSettings();
   if (!settings.enabled) return;
 
@@ -237,11 +289,13 @@ async function emitActiveTabEvent({ force = false } = {}) {
     STATE.consecutiveErrors = 0;
     STATE.lastError = null;
     STATE.lastErrorAtMs = 0;
+    await persistState();
     await setStatus({ ok: true, lastSent: payload, error: null });
   } catch (e) {
     STATE.consecutiveErrors += 1;
     STATE.lastError = String(e);
     STATE.lastErrorAtMs = Date.now();
+    await persistState();
     await setStatus({ ok: false, error: String(e) });
   }
 }
@@ -259,6 +313,7 @@ async function emitActiveTabEventSafe(opts) {
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
+  await ensureStateLoaded();
   const stored = await chrome.storage.sync.get(null);
   if (!stored || Object.keys(stored).length === 0) {
     await chrome.storage.sync.set(DEFAULTS);
@@ -270,6 +325,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup?.addListener(async () => {
   try {
+    await ensureStateLoaded();
     await chrome.alarms.create("heartbeat", { periodInMinutes: 1 });
     await emitActiveTabEventSafe({ force: true });
   } catch {

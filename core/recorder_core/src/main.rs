@@ -161,6 +161,268 @@ struct NowSnapshot {
     latest_titles: HashMap<String, String>, // key: "app|<entity>" or "domain|<hostname>"
 }
 
+#[derive(Clone)]
+struct EventRow {
+    id: i64,
+    ts: String,
+    source: String,
+    event: String,
+    entity: Option<String>,
+    title: Option<String>,
+    payload_json: String,
+}
+
+fn parse_activity_from_payload(payload_json: &str) -> Option<String> {
+    serde_json::from_str::<Value>(payload_json)
+        .ok()
+        .and_then(|v| v.get("activity").and_then(|a| a.as_str()).map(|s| s.to_string()))
+}
+
+fn event_record_from_row(row: &EventRow) -> EventRecord {
+    EventRecord {
+        id: row.id,
+        ts: row.ts.clone(),
+        source: row.source.clone(),
+        event: row.event.clone(),
+        entity: row.entity.clone(),
+        title: row.title.clone(),
+        activity: parse_activity_from_payload(&row.payload_json),
+    }
+}
+
+fn apply_privacy_to_event(mut e: EventRecord, privacy: &PrivacyIndex) -> Option<EventRecord> {
+    if let Some(entity) = e.entity.as_deref() {
+        match privacy.decision_for(&e.event, entity) {
+            PrivacyDecision::Allow => {}
+            PrivacyDecision::Drop => return None,
+            PrivacyDecision::Mask => {
+                e.entity = Some("__hidden__".to_string());
+                e.title = None;
+            }
+        }
+    }
+    Some(e)
+}
+
+fn load_now_snapshot(
+    conn: &mut Connection,
+    privacy: &PrivacyIndex,
+    scan_limit: usize,
+) -> rusqlite::Result<NowSnapshot> {
+    let scan_limit = scan_limit.clamp(1, 2000);
+
+    let mut latest_event_id: Option<i64> = None;
+    let mut latest_event: Option<EventRecord> = None;
+
+    let mut app_active: Option<EventRecord> = None;
+    let mut tab_focus: Option<EventRecord> = None;
+    let mut tab_audio: Option<EventRecord> = None;
+    let mut tab_audio_stop: Option<EventRecord> = None;
+    let mut app_audio: Option<EventRecord> = None;
+    let mut app_audio_stop: Option<EventRecord> = None;
+
+    // 1) latest_event (after privacy)
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, source, event, entity, title, payload_json FROM events ORDER BY ts DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([scan_limit as i64], |row| {
+            Ok(EventRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                source: row.get(2)?,
+                event: row.get(3)?,
+                entity: row.get(4)?,
+                title: row.get(5)?,
+                payload_json: row.get(6)?,
+            })
+        })?;
+        for r in rows {
+            let row = r?;
+            let e = event_record_from_row(&row);
+            let Some(e) = apply_privacy_to_event(e, privacy) else {
+                continue;
+            };
+            latest_event_id = Some(e.id);
+            latest_event = Some(e);
+            break;
+        }
+    }
+
+    // 2) app_active
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, source, event, entity, title, payload_json FROM events WHERE event = 'app_active' ORDER BY ts DESC LIMIT 50",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(EventRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                source: row.get(2)?,
+                event: row.get(3)?,
+                entity: row.get(4)?,
+                title: row.get(5)?,
+                payload_json: row.get(6)?,
+            })
+        })?;
+        for r in rows {
+            let row = r?;
+            let e = event_record_from_row(&row);
+            let Some(e) = apply_privacy_to_event(e, privacy) else {
+                continue;
+            };
+            app_active = Some(e);
+            break;
+        }
+    }
+
+    // 3) tab_active focus/audio (scan recent)
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, source, event, entity, title, payload_json FROM events WHERE event = 'tab_active' ORDER BY ts DESC LIMIT 200",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(EventRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                source: row.get(2)?,
+                event: row.get(3)?,
+                entity: row.get(4)?,
+                title: row.get(5)?,
+                payload_json: row.get(6)?,
+            })
+        })?;
+        for r in rows {
+            let row = r?;
+            let e = event_record_from_row(&row);
+            let Some(e) = apply_privacy_to_event(e, privacy) else {
+                continue;
+            };
+            if e.activity.as_deref() == Some("audio") {
+                if tab_audio.is_none() {
+                    tab_audio = Some(e);
+                }
+            } else if tab_focus.is_none() {
+                tab_focus = Some(e);
+            }
+            if tab_focus.is_some() && tab_audio.is_some() {
+                break;
+            }
+        }
+    }
+
+    // 4) tab_audio_stop
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, source, event, entity, title, payload_json FROM events WHERE event = 'tab_audio_stop' ORDER BY ts DESC LIMIT 50",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(EventRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                source: row.get(2)?,
+                event: row.get(3)?,
+                entity: row.get(4)?,
+                title: row.get(5)?,
+                payload_json: row.get(6)?,
+            })
+        })?;
+        for r in rows {
+            let row = r?;
+            let e = event_record_from_row(&row);
+            let Some(e) = apply_privacy_to_event(e, privacy) else {
+                continue;
+            };
+            tab_audio_stop = Some(e);
+            break;
+        }
+    }
+
+    // 5) app_audio / app_audio_stop
+    for (ev, out) in [
+        ("app_audio", &mut app_audio),
+        ("app_audio_stop", &mut app_audio_stop),
+    ] {
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, source, event, entity, title, payload_json FROM events WHERE event = ?1 ORDER BY ts DESC LIMIT 50",
+        )?;
+        let rows = stmt.query_map([ev], |row| {
+            Ok(EventRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                source: row.get(2)?,
+                event: row.get(3)?,
+                entity: row.get(4)?,
+                title: row.get(5)?,
+                payload_json: row.get(6)?,
+            })
+        })?;
+        for r in rows {
+            let row = r?;
+            let e = event_record_from_row(&row);
+            let Some(e) = apply_privacy_to_event(e, privacy) else {
+                continue;
+            };
+            *out = Some(e);
+            break;
+        }
+    }
+
+    // 6) latest_titles (best-effort hints for UI). Only from stored titles.
+    let mut latest_titles: HashMap<String, String> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT event, entity, title FROM events WHERE title IS NOT NULL AND title != '' AND entity IS NOT NULL AND entity != '' AND (event = 'tab_active' OR event = 'app_active') ORDER BY ts DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([scan_limit as i64], |row| {
+            let event: String = row.get(0)?;
+            let entity: String = row.get(1)?;
+            let title: String = row.get(2)?;
+            Ok((event, entity, title))
+        })?;
+        for r in rows {
+            let (event, entity, title) = r?;
+            let ent = entity.trim();
+            let t = title.trim();
+            if ent.is_empty() || t.is_empty() {
+                continue;
+            }
+
+            // Apply privacy retroactively.
+            match privacy.decision_for(&event, ent) {
+                PrivacyDecision::Allow => {}
+                PrivacyDecision::Drop | PrivacyDecision::Mask => continue,
+            }
+
+            if event == "tab_active" {
+                latest_titles
+                    .entry(format!("domain|{}", ent.to_lowercase()))
+                    .or_insert_with(|| t.to_string());
+            } else if event == "app_active" {
+                latest_titles
+                    .entry(format!("app|{}", ent))
+                    .or_insert_with(|| t.to_string());
+            }
+
+            if latest_titles.len() >= 64 {
+                break;
+            }
+        }
+    }
+
+    Ok(NowSnapshot {
+        latest_event_id,
+        latest_event,
+        app_active,
+        tab_focus,
+        tab_audio,
+        tab_audio_stop,
+        app_audio,
+        app_audio_stop,
+        latest_titles,
+    })
+}
+
 #[derive(Deserialize)]
 struct BlocksQuery {
     /// Date in YYYY-MM-DD.
@@ -735,14 +997,13 @@ async fn get_events(State(state): State<AppState>, Query(q): Query<EventsQuery>)
 }
 
 async fn get_now(State(state): State<AppState>, Query(q): Query<NowQuery>) -> Response {
-    let limit = q.limit.clamp(1, 2000);
     let mut conn = state.conn.lock().await;
     let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
 
-    let events = match list_events(&mut conn, limit, &privacy) {
+    let snap = match load_now_snapshot(&mut conn, &privacy, q.limit) {
         Ok(v) => v,
         Err(err) => {
-            error!("list_events for /now failed: {err}");
+            error!("load_now_snapshot failed: {err}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrResponse {
@@ -754,78 +1015,9 @@ async fn get_now(State(state): State<AppState>, Query(q): Query<NowQuery>) -> Re
         }
     };
 
-    let latest_event_id = events.first().map(|e| e.id);
-    let latest_event = events.first().cloned();
-    let mut app_active: Option<EventRecord> = None;
-    let mut tab_focus: Option<EventRecord> = None;
-    let mut tab_audio: Option<EventRecord> = None;
-    let mut tab_audio_stop: Option<EventRecord> = None;
-    let mut app_audio: Option<EventRecord> = None;
-    let mut app_audio_stop: Option<EventRecord> = None;
-
-    let mut latest_titles: HashMap<String, String> = HashMap::new();
-
-    for e in &events {
-        if app_active.is_none() && e.event == "app_active" {
-            app_active = Some(e.clone());
-        }
-        if tab_focus.is_none() && e.event == "tab_active" && e.activity.as_deref() != Some("audio") {
-            tab_focus = Some(e.clone());
-        }
-        if tab_audio.is_none() && e.event == "tab_active" && e.activity.as_deref() == Some("audio") {
-            tab_audio = Some(e.clone());
-        }
-        if tab_audio_stop.is_none() && e.event == "tab_audio_stop" {
-            tab_audio_stop = Some(e.clone());
-        }
-        if app_audio.is_none() && e.event == "app_audio" {
-            app_audio = Some(e.clone());
-        }
-        if app_audio_stop.is_none() && e.event == "app_audio_stop" {
-            app_audio_stop = Some(e.clone());
-        }
-
-        if let (Some(entity), Some(title)) = (e.entity.as_deref(), e.title.as_deref()) {
-            let ent = entity.trim();
-            let t = title.trim();
-            if !ent.is_empty() && !t.is_empty() {
-                if e.event == "tab_active" {
-                    latest_titles
-                        .entry(format!("domain|{}", ent.to_lowercase()))
-                        .or_insert_with(|| t.to_string());
-                } else if e.event == "app_active" {
-                    latest_titles
-                        .entry(format!("app|{}", ent))
-                        .or_insert_with(|| t.to_string());
-                }
-            }
-        }
-
-        if app_active.is_some()
-            && tab_focus.is_some()
-            && tab_audio.is_some()
-            && tab_audio_stop.is_some()
-            && app_audio.is_some()
-            && app_audio_stop.is_some()
-            && latest_titles.len() >= 64
-        {
-            break;
-        }
-    }
-
     Json(OkResponse {
         ok: true,
-        data: Some(NowSnapshot {
-            latest_event_id,
-            latest_event,
-            app_active,
-            tab_focus,
-            tab_audio,
-            tab_audio_stop,
-            app_audio,
-            app_audio_stop,
-            latest_titles,
-        }),
+        data: Some(snap),
     })
     .into_response()
 }
@@ -1834,6 +2026,7 @@ CREATE TABLE IF NOT EXISTS events (
   payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_events_event_ts ON events(event, ts);
 
 CREATE TABLE IF NOT EXISTS block_reviews (
   block_id TEXT PRIMARY KEY,

@@ -747,6 +747,118 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 final lastTabAge = lastTabTs == null ? null : DateTime.now().difference(lastTabTs);
                 final tabLooksStale = lastTabAge == null || lastTabAge.inMinutes >= 6;
 
+                bool hasAnyTabEvent = lastTabFocus != null || lastTabAudio != null;
+                String anyTabTitle() {
+                  final t1 = (lastTabFocus?.title ?? "").trim();
+                  if (t1.isNotEmpty) return t1;
+                  final t2 = (lastTabAudio?.title ?? "").trim();
+                  if (t2.isNotEmpty) return t2;
+                  return "";
+                }
+
+                final tabHasTitle = anyTabTitle().isNotEmpty;
+                final appHasTitle = ((lastApp?.title ?? "").trim()).isNotEmpty;
+                final appTitleUseful = lastApp != null && !appLooksLikeBrowser; // browser window titles are noisy
+
+                Widget titleGuide() {
+                  final scheme = Theme.of(context).colorScheme;
+
+                  String title;
+                  String subtitle;
+                  IconData icon;
+                  List<Widget> actions = [];
+
+                  if (!_storeTitles) {
+                    title = "Titles: OFF (L1)";
+                    subtitle =
+                        "To split sites like YouTube by video title and to show VS Code workspace/window titles, enable L2.\nOld data won't be backfilled.";
+                    icon = Icons.lock_outline;
+                    actions = [
+                      FilledButton(
+                        onPressed: _coreSettingsSaving
+                            ? null
+                            : () async {
+                                setState(() {
+                                  _storeTitles = true;
+                                  _storeExePath = false;
+                                });
+                                await _saveCoreSettings();
+                              },
+                        child: const Text("Enable L2"),
+                      ),
+                    ];
+                  } else {
+                    title = "Titles: ON (L2)";
+                    icon = Icons.check_circle_outline;
+
+                    final tips = <String>[];
+                    if (hasAnyTabEvent && !tabHasTitle) {
+                      tips.add("Browser: enable “Send tab title” in the extension popup, then click “Force send”.");
+                    }
+                    if (!hasAnyTabEvent) {
+                      tips.add("Browser: no tab events yet. Switch a tab or click “Force send” in the extension popup.");
+                    }
+                    if (appTitleUseful && !appHasTitle) {
+                      tips.add("Windows: start windows_collector with --send-title to capture window titles/workspaces.");
+                    }
+
+                    subtitle = tips.isEmpty
+                        ? "Looks good. You should see per-tab titles (when available) and better app context (e.g. VS Code workspace)."
+                        : tips.join("\n");
+
+                    actions = [
+                      OutlinedButton.icon(
+                        onPressed: _deleteDayLoading
+                            ? null
+                            : () async {
+                                setState(() {
+                                  _dateLocal.text = _todayLocal();
+                                });
+                                await _deleteDayData();
+                              },
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text("Reset today"),
+                      ),
+                    ];
+                  }
+
+                  return Padding(
+                    padding: const EdgeInsets.all(RecorderTokens.space2),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
+                        border: Border.all(color: scheme.outline.withValues(alpha: 0.10)),
+                      ),
+                      padding: const EdgeInsets.all(RecorderTokens.space3),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(icon, size: 18, color: scheme.onSurfaceVariant),
+                          const SizedBox(width: RecorderTokens.space2),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(title, style: Theme.of(context).textTheme.labelLarge),
+                                const SizedBox(height: 4),
+                                Text(subtitle, style: Theme.of(context).textTheme.labelMedium),
+                              ],
+                            ),
+                          ),
+                          if (actions.isNotEmpty) ...[
+                            const SizedBox(width: RecorderTokens.space2),
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: actions,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
                 Widget tile({
                   required String title,
                   required EventRecord? e,
@@ -796,6 +908,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 return Column(
                   children: [
+                    titleGuide(),
                     if (_nowError != null && snap == null)
                       Padding(
                         padding: const EdgeInsets.all(RecorderTokens.space2),

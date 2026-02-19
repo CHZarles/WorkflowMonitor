@@ -522,11 +522,18 @@ class TodayScreenState extends State<TodayScreen> {
         name.contains("firefox")) {
       return Icons.public;
     }
+    if (name.contains("explorer") || name == "files" || name.contains("finder")) return Icons.folder_outlined;
+    if (name.contains("powershell") || name == "pwsh" || name == "cmd" || name.contains("terminal")) return Icons.terminal;
+    if (name.contains("qqmusic") || name.contains("music") || name.contains("spotify")) return Icons.music_note_outlined;
+    if (name.contains("wechat") || name.contains("weixin") || name == "qq" || name.contains("telegram")) return Icons.chat_bubble_outline;
     if (name.contains("slack") || name.contains("discord") || name.contains("teams") || name.contains("telegram")) {
       return Icons.chat_bubble_outline;
     }
+    if (name.contains("zoom") || name.contains("meet") || name.contains("webex")) return Icons.video_call_outlined;
+    if (name.contains("figma") || name.contains("sketch") || name.contains("xd")) return Icons.design_services_outlined;
     if (name.contains("notion") || name.contains("obsidian") || name.contains("notes")) return Icons.note_alt_outlined;
     if (name.contains("excel") || name.contains("word") || name.contains("powerpoint")) return Icons.description_outlined;
+    if (name.contains("steam") || name.contains("epic") || name.contains("battle.net")) return Icons.sports_esports_outlined;
     return Icons.apps;
   }
 
