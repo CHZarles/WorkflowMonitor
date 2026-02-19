@@ -16,7 +16,7 @@ Set-Location $RepoRoot
 Write-Host "[run-desktop] repo: $RepoRoot"
 Write-Host "[run-desktop] core: $CoreUrl"
 
-powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "dev\\run-agent.ps1") `
+& (Join-Path $RepoRoot "dev\\run-agent.ps1") `
   -RepoRoot $RepoRoot `
   -CoreUrl $CoreUrl `
   -Restart:$RestartAgent `
@@ -25,6 +25,6 @@ powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "dev\\run-agent.ps
   -TrackAudio $TrackAudio `
   -ReviewNotify $ReviewNotify
 
-powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "dev\\run-ui.ps1") `
+& (Join-Path $RepoRoot "dev\\run-ui.ps1") `
   -RepoRoot $RepoRoot `
   -Device $Device
