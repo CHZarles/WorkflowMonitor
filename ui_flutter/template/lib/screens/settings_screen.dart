@@ -817,10 +817,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 spacing: RecorderTokens.space2,
                                 runSpacing: RecorderTokens.space2,
                                 children: [
-                                  FilledButton.icon(
-                                    onPressed: _agentBusy ? null : () => _startAgent(restart: false),
-                                    icon: const Icon(Icons.play_arrow),
-                                    label: Text(_agentBusy ? "Starting…" : "Start"),
+                                  Builder(
+                                    builder: (context) {
+                                      final service = _healthInfo?.service;
+                                      final coreLooksHealthy = _healthOk == true && service == "recorder_core";
+                                      final alreadyRunning = _isLocalServerUrl() && coreLooksHealthy;
+                                      final startEnabled = !_agentBusy && _isLocalServerUrl() && !alreadyRunning;
+                                      return FilledButton.icon(
+                                        onPressed: startEnabled ? () => _startAgent(restart: false) : null,
+                                        icon: Icon(alreadyRunning ? Icons.check_circle_outline : Icons.play_arrow),
+                                        label: Text(
+                                          _agentBusy
+                                              ? "Starting…"
+                                              : alreadyRunning
+                                                  ? "Running"
+                                                  : "Start",
+                                        ),
+                                      );
+                                    },
                                   ),
                                   OutlinedButton.icon(
                                     onPressed: _agentBusy ? null : () => _startAgent(restart: true),
