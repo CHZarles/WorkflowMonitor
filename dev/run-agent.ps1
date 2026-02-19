@@ -40,7 +40,7 @@ function Parse-BoolStrict {
   if ($lower -eq "yes" -or $lower -eq "y" -or $lower -eq "on") { return $true }
   if ($lower -eq "no" -or $lower -eq "n" -or $lower -eq "off") { return $false }
 
-  throw "Invalid -$Name: '$s' (use `$true/`$false or 1/0)"
+  throw "Invalid -${Name}: '$s' (use true/false or 1/0)"
 }
 
 try {
