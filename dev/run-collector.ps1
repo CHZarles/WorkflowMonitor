@@ -21,11 +21,13 @@ if (-not (Test-Path $exe)) {
   throw "windows_collector.exe not found at: $exe"
 }
 
-$args = @("--core-url", $CoreUrl, "--track-audio=$TrackAudio", "--review-notify=$ReviewNotify")
+$trackAudioArg = $TrackAudio.ToString().ToLowerInvariant()
+$reviewNotifyArg = $ReviewNotify.ToString().ToLowerInvariant()
+
+$args = @("--core-url", $CoreUrl, "--track-audio=$trackAudioArg", "--review-notify=$reviewNotifyArg")
 if ($SendTitle) {
   $args += "--send-title"
 }
 
 Write-Host "[run-collector] $exe $($args -join ' ')"
 & $exe @args
-

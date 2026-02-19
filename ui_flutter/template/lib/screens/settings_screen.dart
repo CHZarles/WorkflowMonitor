@@ -790,7 +790,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               child: Text(
                                 (_nowError ?? "").contains("http_404")
                                     ? "Tip: this Core does not implement /now. Restart recorder_core and refresh."
-                                    : "Now endpoint error: $_nowError${usingFallbackEvents ? \" (fallback to /events)\" : \"\"}",
+                                    : "Now endpoint error: $_nowError${usingFallbackEvents ? ' (fallback to /events)' : ''}",
                                 style: Theme.of(context).textTheme.labelMedium,
                               ),
                             ),
