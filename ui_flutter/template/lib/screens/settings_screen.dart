@@ -808,7 +808,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               const SizedBox(height: 2),
                               Text(
                                 _agentRepoRoot == null
-                                    ? "Repo root not detected. Run UI from the repo, or set env RECORDERPHONE_REPO_ROOT."
+                                    ? "Repo root not detected. This is OK in packaged mode.\nIf you're running from source, run UI from the repo or set env RECORDERPHONE_REPO_ROOT."
                                     : "Repo: $_agentRepoRoot",
                                 style: Theme.of(context).textTheme.labelMedium,
                               ),
