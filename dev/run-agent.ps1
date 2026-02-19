@@ -79,8 +79,10 @@ if (-not (Test-Path $collectorExe)) {
 
 $logDir = Join-Path $RepoRoot "data\\logs"
 New-Item -ItemType Directory -Force $logDir | Out-Null
-$coreLog = Join-Path $logDir "core.log"
-$collectorLog = Join-Path $logDir "collector.log"
+$coreOutLog = Join-Path $logDir "core.log"
+$coreErrLog = Join-Path $logDir "core.err.log"
+$collectorOutLog = Join-Path $logDir "collector.log"
+$collectorErrLog = Join-Path $logDir "collector.err.log"
 
 function Test-CoreHealth {
   try {
@@ -105,8 +107,8 @@ if (Test-CoreHealth) {
     -WorkingDirectory $RepoRoot `
     -PassThru `
     -WindowStyle Hidden `
-    -RedirectStandardOutput $coreLog `
-    -RedirectStandardError $coreLog
+    -RedirectStandardOutput $coreOutLog `
+    -RedirectStandardError $coreErrLog
   $coreStarted = $true
 
   $ok = $false
@@ -115,7 +117,7 @@ if (Test-CoreHealth) {
     Start-Sleep -Milliseconds 250
   }
   if (-not $ok) {
-    throw "Core did not become healthy at $CoreUrl. Check $coreLog"
+    throw "Core did not become healthy at $CoreUrl. Check $coreOutLog and $coreErrLog"
   }
 }
 
@@ -142,8 +144,8 @@ $collectorProc = Start-Process `
   -WorkingDirectory $RepoRoot `
   -PassThru `
   -WindowStyle Hidden `
-  -RedirectStandardOutput $collectorLog `
-  -RedirectStandardError $collectorLog
+  -RedirectStandardOutput $collectorOutLog `
+  -RedirectStandardError $collectorErrLog
 
 $pidInfo = @{
   coreUrl = $CoreUrl
@@ -152,8 +154,12 @@ $pidInfo = @{
   startedAt = (Get-Date).ToString("o")
   corePid = if ($coreStarted -and $coreProc) { $coreProc.Id } else { $null }
   collectorPid = if ($collectorProc) { $collectorProc.Id } else { $null }
-  coreLog = $coreLog
-  collectorLog = $collectorLog
+  coreLog = $coreOutLog
+  collectorLog = $collectorOutLog
+  coreStdoutLog = $coreOutLog
+  coreStderrLog = $coreErrLog
+  collectorStdoutLog = $collectorOutLog
+  collectorStderrLog = $collectorErrLog
 }
 
 $pidFile = Join-Path $RepoRoot "data\\agent-pids.json"
@@ -162,5 +168,7 @@ $pidInfo | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 $pidFile
 Write-Host "[run-agent] ok"
 Write-Host "[run-agent] pids: $pidFile"
 Write-Host "[run-agent] logs:"
-Write-Host "  core: $coreLog"
-Write-Host "  collector: $collectorLog"
+Write-Host "  core: $coreOutLog"
+Write-Host "  core(err): $coreErrLog"
+Write-Host "  collector: $collectorOutLog"
+Write-Host "  collector(err): $collectorErrLog"
