@@ -46,8 +46,8 @@ powershell -ExecutionPolicy Bypass -File .\dev\run-desktop.ps1 -SendTitle
 ```
 
 说明：
-- Core 会作为后台进程启动，监听 `http://127.0.0.1:17600`（日志在 `data\logs\core.log`）。
-- Collector 也会作为后台进程启动（日志在 `data\logs\collector.log`）。
+- Core 会作为后台进程启动，监听 `http://127.0.0.1:17600`（日志在 `data\logs\core.log`，错误在 `data\logs\core.err.log`）。
+- Collector 也会作为后台进程启动（日志在 `data\logs\collector.log`，错误在 `data\logs\collector.err.log`）。
 - UI 仍然是前台 `flutter run -d windows`。
 
 停止后台进程：
