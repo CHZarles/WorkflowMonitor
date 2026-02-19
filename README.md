@@ -13,6 +13,7 @@
 - `COMPONENTS_TOKENS.md`
 - `design-tokens.json`（Light/Dark + tokens 源数据）
 - `WINDOWS_DEV.md`（在 Windows 查看最新开发进展：WSL 同步 + Flutter 覆盖流程）
+- `ANDROID_DEV.md`（Android 端如何联调桌面 Core：adb reverse / 模拟器 / 局域网）
 
 ## 目录结构
 ```
@@ -52,6 +53,11 @@ android/        Android Compose 原型（已不作为主路径）
 1. 在 WSL 启动 Core：`bash dev/run-core.sh 127.0.0.1:17600`（等价于 `cargo run -p recorder_core -- --listen 127.0.0.1:17600`）
 2. 在 Windows 浏览器加载 `extension/`（解压加载），popup 点击 `Test /health` 应显示 `OK`
 3. 随便打开/切换几个网页 tab：访问 `http://127.0.0.1:17600/events` 能看到域名事件
+
+### 方案 A2（Windows 本地一键启动：不依赖 WSL）
+在 Windows PowerShell：
+`powershell -ExecutionPolicy Bypass -File .\\dev\\run-desktop.ps1 -SendTitle`
+> 详见：`WINDOWS_DEV.md`。
 
 ### 方案 B（仅用于扩展联调：不支持 UI）
 1. 在 WSL 启动简化接收服务：`node dev/ingest-server.mjs`

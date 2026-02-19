@@ -42,6 +42,33 @@ class EntityAvatar extends StatelessWidget {
     return Uri(scheme: "https", host: d, path: "/favicon.ico").toString();
   }
 
+  bool _isIpLike(String host) => RegExp(r"^\\d{1,3}(\\.\\d{1,3}){3}$").hasMatch(host.trim());
+
+  String? _googleFaviconUrlForDomain(String rawDomain) {
+    final d = rawDomain.trim().toLowerCase();
+    if (d.isEmpty) return null;
+    if (d == "__hidden__") return null;
+    if (d.contains(RegExp(r"[\\/\s]"))) return null;
+    if (d.contains(":")) return null;
+    if (!d.contains(".")) return null;
+    if (_isIpLike(d)) return null;
+    return Uri.https("www.google.com", "/s2/favicons", {"domain": d, "sz": "64"}).toString();
+  }
+
+  IconData? _fallbackIconForDomain(String rawDomain) {
+    final d = rawDomain.trim().toLowerCase();
+    if (d.isEmpty) return null;
+    if (d.endsWith("youtube.com") || d.contains("youtube.")) return Icons.play_circle_fill;
+    if (d.endsWith("github.com")) return Icons.code;
+    if (d.endsWith("notion.so")) return Icons.description;
+    if (d.endsWith("docs.google.com")) return Icons.description;
+    if (d.endsWith("calendar.google.com")) return Icons.event;
+    if (d.endsWith("drive.google.com")) return Icons.cloud_outlined;
+    if (d.endsWith("figma.com")) return Icons.design_services_outlined;
+    if (d.endsWith("chat.openai.com") || d.endsWith("chatgpt.com")) return Icons.smart_toy_outlined;
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -64,6 +91,30 @@ class EntityAvatar extends StatelessWidget {
     final text = kind == "domain" ? _firstGlyph(entity) : _firstGlyph(label);
 
     final faviconUrl = kind == "domain" && !isHidden ? _faviconUrlForDomain(entity) : null;
+    final faviconUrlFallback = kind == "domain" && !isHidden ? _googleFaviconUrlForDomain(entity) : null;
+    final domainFallbackIcon = kind == "domain" && !isHidden ? _fallbackIconForDomain(entity) : null;
+
+    Widget fallbackWidget() {
+      if (domainFallbackIcon != null) {
+        return Icon(domainFallbackIcon, size: (size * 0.62).clamp(14, 18).toDouble(), color: fg);
+      }
+      return _letterFallback(context, text, fg);
+    }
+
+    Widget buildNetworkImage(String url, {String? fallbackUrl}) {
+      return Image.network(
+        url,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) {
+          if (fallbackUrl != null && fallbackUrl.trim().isNotEmpty) {
+            return buildNetworkImage(fallbackUrl);
+          }
+          return fallbackWidget();
+        },
+      );
+    }
 
     return SizedBox(
       width: size,
@@ -79,15 +130,9 @@ class EntityAvatar extends StatelessWidget {
               ? Icon(effectiveIcon, size: (size * 0.58).clamp(14, 18).toDouble(), color: fg)
               : (faviconUrl != null
                   ? ClipOval(
-                      child: Image.network(
-                        faviconUrl,
-                        width: size,
-                        height: size,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _letterFallback(context, text, fg),
-                      ),
+                      child: buildNetworkImage(faviconUrl, fallbackUrl: faviconUrlFallback),
                     )
-                  : _letterFallback(context, text, fg)),
+                  : fallbackWidget()),
         ),
       ),
     );

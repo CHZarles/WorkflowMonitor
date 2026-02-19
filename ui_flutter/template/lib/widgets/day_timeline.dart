@@ -86,8 +86,8 @@ class DayTimeline extends StatelessWidget {
     final gridColorMinor = scheme.onSurface.withValues(alpha: 0.06);
     final labelColor = scheme.onSurfaceVariant;
 
-    final chartHeight = lanes.length * laneHeight;
-    final vPad = ((laneHeight - barHeight) / 2).clamp(0.0, 24.0).toDouble();
+    final chartHeight = (lanes.length * laneHeight).toDouble();
+    final vPad = (((laneHeight - barHeight) / 2).clamp(0.0, 24.0)).toDouble();
 
     final int? nowMin = showNowIndicator
         ? (() {
@@ -173,7 +173,7 @@ class DayTimeline extends StatelessWidget {
               Positioned(
                 left: 0,
                 right: 0,
-                top: i * laneHeight,
+                top: (i * laneHeight).toDouble(),
                 height: laneHeight,
                 child: Container(
                   decoration: BoxDecoration(
@@ -187,7 +187,7 @@ class DayTimeline extends StatelessWidget {
               for (final bar in lanes[i].bars)
                 Positioned(
                   left: width * (bar.startMinute / 1440.0),
-                  top: i * laneHeight + vPad,
+                  top: (i * laneHeight + vPad).toDouble(),
                   width: (width * ((bar.endMinute - bar.startMinute) / 1440.0)).clamp(2.0, width).toDouble(),
                   height: barHeight,
                   child: Tooltip(

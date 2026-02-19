@@ -1,8 +1,10 @@
+import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
 
 import "../api/core_client.dart";
 import "../theme/tokens.dart";
+import "../utils/desktop_agent.dart";
 import "../utils/format.dart";
 
 enum _PrivacyLevel { l1, l2, l3 }
@@ -59,6 +61,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _deleteDayLoading = false;
   bool _wipeAllLoading = false;
 
+  bool _agentBusy = false;
+  String? _agentRepoRoot;
+
   @override
   void initState() {
     super.initState();
@@ -67,6 +72,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _idleCutoffMinutes = TextEditingController(text: "5");
     _ruleQuery = TextEditingController();
     _refreshAll();
+    _loadAgentInfo();
+  }
+
+  Future<void> _loadAgentInfo() async {
+    final agent = DesktopAgent.instance;
+    if (!agent.isAvailable) return;
+    try {
+      final root = await agent.findRepoRoot();
+      if (!mounted) return;
+      setState(() => _agentRepoRoot = root);
+    } catch (_) {
+      // best effort
+    }
+  }
+
+  bool _isLocalServerUrl() {
+    final u = Uri.tryParse(widget.serverUrl.trim());
+    if (u == null) return false;
+    final host = u.host.trim().toLowerCase();
+    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+  }
+
+  Future<void> _startAgent({required bool restart}) async {
+    final agent = DesktopAgent.instance;
+    if (!agent.isAvailable) return;
+    if (!_isLocalServerUrl()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Agent can only start when Server URL is localhost.")),
+      );
+      return;
+    }
+
+    setState(() => _agentBusy = true);
+    try {
+      final res = await agent.start(
+        coreUrl: widget.serverUrl,
+        restart: restart,
+        sendTitle: _storeTitles,
+      );
+      if (!mounted) return;
+      final msg = res.ok ? "Agent started" : "Agent start failed";
+      final details = (res.message ?? "").trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          showCloseIcon: true,
+          content: Text(details.isEmpty ? msg : "$msg: $details"),
+        ),
+      );
+      await _refreshAll();
+    } finally {
+      if (mounted) setState(() => _agentBusy = false);
+    }
+  }
+
+  Future<void> _stopAgent() async {
+    final agent = DesktopAgent.instance;
+    if (!agent.isAvailable) return;
+    setState(() => _agentBusy = true);
+    try {
+      final res = await agent.stop(killAllByName: true);
+      if (!mounted) return;
+      final msg = res.ok ? "Agent stopped" : "Agent stop failed";
+      final details = (res.message ?? "").trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          showCloseIcon: true,
+          content: Text(details.isEmpty ? msg : "$msg: $details"),
+        ),
+      );
+      await _refreshAll();
+    } finally {
+      if (mounted) setState(() => _agentBusy = false);
+    }
   }
 
   @override
@@ -354,15 +435,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _editServerUrl() async {
+    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     final controller = TextEditingController(text: widget.serverUrl);
     final saved = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("Server URL"),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: "http://127.0.0.1:17600",
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  hintText: "http://127.0.0.1:17600",
+                ),
+              ),
+              if (isAndroid) ...[
+                const SizedBox(height: RecorderTokens.space3),
+                Text(
+                  "Android tips",
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                const SizedBox(height: RecorderTokens.space1),
+                Text(
+                  "• Emulator: use http://10.0.2.2:17600\n"
+                  "• Physical device: use your desktop LAN IP\n"
+                  "• Dev shortcut: run `adb reverse tcp:17600 tcp:17600`, then keep using http://127.0.0.1:17600",
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                const SizedBox(height: RecorderTokens.space2),
+                Wrap(
+                  spacing: RecorderTokens.space2,
+                  runSpacing: RecorderTokens.space2,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () => controller.text = "http://10.0.2.2:17600",
+                      child: const Text("Use 10.0.2.2"),
+                    ),
+                    OutlinedButton(
+                      onPressed: () => controller.text = "http://127.0.0.1:17600",
+                      child: const Text("Use 127.0.0.1"),
+                    ),
+                  ],
+                ),
+              ],
+            ],
           ),
         ),
         actions: [
@@ -662,6 +784,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                 ),
+                if (DesktopAgent.instance.isAvailable) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.all(RecorderTokens.space2),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.memory,
+                          size: 18,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: RecorderTokens.space2),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "Desktop agent (Windows)",
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _agentRepoRoot == null
+                                    ? "Repo root not detected. Run UI from the repo, or set env RECORDERPHONE_REPO_ROOT."
+                                    : "Repo: $_agentRepoRoot",
+                                style: Theme.of(context).textTheme.labelMedium,
+                              ),
+                              const SizedBox(height: RecorderTokens.space2),
+                              Wrap(
+                                spacing: RecorderTokens.space2,
+                                runSpacing: RecorderTokens.space2,
+                                children: [
+                                  FilledButton.icon(
+                                    onPressed: _agentBusy ? null : () => _startAgent(restart: false),
+                                    icon: const Icon(Icons.play_arrow),
+                                    label: Text(_agentBusy ? "Starting…" : "Start"),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: _agentBusy ? null : () => _startAgent(restart: true),
+                                    icon: const Icon(Icons.restart_alt),
+                                    label: const Text("Restart"),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: _agentBusy ? null : _stopAgent,
+                                    icon: const Icon(Icons.stop),
+                                    label: const Text("Stop"),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: RecorderTokens.space2),
+                              Text(
+                                _isLocalServerUrl()
+                                    ? "Starts local Core + windows_collector so you don't need to run WSL Core."
+                                    : "Set Server URL to http://127.0.0.1:17600 to use the local agent.",
+                                style: Theme.of(context).textTheme.labelMedium,
+                              ),
+                              if (_storeTitles) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  "L2 is ON → Agent will start Collector with --send-title.",
+                                  style: Theme.of(context).textTheme.labelMedium,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

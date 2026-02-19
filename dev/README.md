@@ -20,6 +20,19 @@ cargo run -p recorder_core -- --listen 127.0.0.1:17600
 ## 方案 B：在 Windows 上编译/运行 Collector（源码仍在 WSL）
 - 建议把仓库镜像到 Windows 文件系统（例如 `C:\\src\\RecorderPhone`），便于 `cargo build --release` 与运行 exe
 
+## 方案 B.5（推荐）：Windows 本地 Core + 一键启动（不依赖 WSL）
+如果你希望 **Windows 端完全本地跑 Core/Collector/UI**（不需要单独起 WSL Core），直接在 Windows PowerShell：
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\run-desktop.ps1 -SendTitle
+```
+
+停止后台 Core/Collector：
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\stop-agent.ps1
+```
+
 ## 方案 C：自动同步到 Windows 路径（“async”/长期推荐）
 如果你想 **在 WSL 编辑**，但让 **Windows 侧构建/运行**（Collector/Flutter Windows）更稳/性能更好，用 rsync 自动镜像：
 ```bash

@@ -30,3 +30,11 @@ ui_flutter/**/build/
 ui_flutter/**/.flutter-plugins
 ui_flutter/**/.flutter-plugins-dependencies
 ui_flutter/**/.idea/
+
+# Flutter (repo-local template package)
+recorderphone_ui/**/.dart_tool/
+recorderphone_ui/**/build/
+recorderphone_ui/**/.flutter-plugins
+recorderphone_ui/**/.flutter-plugins-dependencies
+recorderphone_ui/**/.idea/
+recorderphone_ui/pubspec.lock

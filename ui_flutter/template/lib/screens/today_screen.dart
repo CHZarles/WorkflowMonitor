@@ -1,10 +1,12 @@
 import "dart:async";
 
+import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:shared_preferences/shared_preferences.dart";
 
 import "../api/core_client.dart";
 import "../theme/tokens.dart";
+import "../utils/desktop_agent.dart";
 import "../utils/format.dart";
 import "../widgets/block_detail_sheet.dart";
 import "../widgets/day_timeline.dart";
@@ -163,6 +165,8 @@ class TodayScreenState extends State<TodayScreen> {
   final Map<String, int> _ruleIdByKey = {};
   final Set<String> _blockedKeys = {};
 
+  bool _agentBusy = false;
+
   @override
   void initState() {
     super.initState();
@@ -204,11 +208,57 @@ class TodayScreenState extends State<TodayScreen> {
 
   bool _viewingToday() => _isSameDay(_normalizeDay(_day), _todayDay());
 
+  bool _isAndroid() => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  bool _serverLooksLikeLocalhost() {
+    final uri = Uri.tryParse(widget.serverUrl.trim());
+    if (uri == null) return false;
+    final host = uri.host.trim().toLowerCase();
+    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0";
+  }
+
   String _dateLocal(DateTime d) {
     final y = d.year.toString().padLeft(4, "0");
     final m = d.month.toString().padLeft(2, "0");
     final dd = d.day.toString().padLeft(2, "0");
     return "$y-$m-$dd";
+  }
+
+  bool _isLocalServerUrl() {
+    final u = Uri.tryParse(widget.serverUrl.trim());
+    if (u == null) return false;
+    final host = u.host.trim().toLowerCase();
+    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+  }
+
+  Future<void> _startLocalAgent() async {
+    final agent = DesktopAgent.instance;
+    if (!agent.isAvailable) return;
+    if (!_isLocalServerUrl()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Agent can only start when Server URL is localhost.")),
+      );
+      return;
+    }
+
+    setState(() => _agentBusy = true);
+    try {
+      final res = await agent.start(coreUrl: widget.serverUrl, restart: false, sendTitle: false);
+      if (!mounted) return;
+      final msg = res.ok ? "Agent started" : "Agent start failed";
+      final details = (res.message ?? "").trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          showCloseIcon: true,
+          content: Text(details.isEmpty ? msg : "$msg: $details"),
+        ),
+      );
+      await refresh(silent: false, triggerReminder: _viewingToday());
+    } finally {
+      if (mounted) setState(() => _agentBusy = false);
+    }
   }
 
   int _tzOffsetMinutesForDay(DateTime d) {
@@ -937,6 +987,7 @@ class TodayScreenState extends State<TodayScreen> {
     final dueAudioTop = due == null ? null : _blockAudioTop(due);
 
     final scheme = Theme.of(context).colorScheme;
+    final showAndroidLocalhostHint = _isAndroid() && _serverLooksLikeLocalhost();
 
     Widget metric({
       required IconData icon,
@@ -1012,6 +1063,35 @@ class TodayScreenState extends State<TodayScreen> {
                 ),
               ],
             ),
+            if (showAndroidLocalhostHint) ...[
+              const SizedBox(height: RecorderTokens.space2),
+              Container(
+                padding: const EdgeInsets.all(RecorderTokens.space3),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
+                  border: Border.all(color: scheme.outline.withValues(alpha: 0.12)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.phone_android, size: 18, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: RecorderTokens.space2),
+                    Expanded(
+                      child: Text(
+                        "Android: ${widget.serverUrl} points to your phone. To connect to desktop Core, set Server URL to your desktop LAN IP, or run `adb reverse tcp:17600 tcp:17600` and keep using http://127.0.0.1:17600.",
+                        style: Theme.of(context).textTheme.labelMedium,
+                      ),
+                    ),
+                    if (widget.onOpenSettings != null)
+                      TextButton(
+                        onPressed: widget.onOpenSettings,
+                        child: const Text("Settings"),
+                      ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: RecorderTokens.space3),
             Wrap(
               spacing: RecorderTokens.space2,
@@ -2176,7 +2256,14 @@ class TodayScreenState extends State<TodayScreen> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
-      return _ErrorState(serverUrl: widget.serverUrl, error: _error!, onRetry: refresh);
+      return _ErrorState(
+        serverUrl: widget.serverUrl,
+        error: _error!,
+        onRetry: refresh,
+        showAgent: DesktopAgent.instance.isAvailable,
+        agentBusy: _agentBusy,
+        onStartAgent: _startLocalAgent,
+      );
     }
 
     final viewingToday = _viewingToday();
@@ -2267,11 +2354,21 @@ class TodayScreenState extends State<TodayScreen> {
 }
 
 class _ErrorState extends StatelessWidget {
-  const _ErrorState({required this.serverUrl, required this.error, required this.onRetry});
+  const _ErrorState({
+    required this.serverUrl,
+    required this.error,
+    required this.onRetry,
+    required this.showAgent,
+    required this.agentBusy,
+    required this.onStartAgent,
+  });
 
   final String serverUrl;
   final String error;
   final VoidCallback onRetry;
+  final bool showAgent;
+  final bool agentBusy;
+  final VoidCallback onStartAgent;
 
   @override
   Widget build(BuildContext context) {
@@ -2291,8 +2388,20 @@ class _ErrorState extends StatelessWidget {
             icon: const Icon(Icons.refresh),
             label: const Text("Retry"),
           ),
+          if (showAgent) ...[
+            const SizedBox(height: RecorderTokens.space2),
+            OutlinedButton.icon(
+              onPressed: agentBusy ? null : onStartAgent,
+              icon: const Icon(Icons.memory),
+              label: Text(agentBusy ? "Starting agent…" : "Start local agent"),
+            ),
+          ],
           const SizedBox(height: RecorderTokens.space4),
-          const Text("Tip: run Core locally:\n  cargo run -p recorder_core -- --listen 127.0.0.1:17600"),
+          const Text(
+            "Tip:\n"
+            "- Start local Core/Collector from Settings → Desktop agent\n"
+            "- Or run Core manually:\n  cargo run -p recorder_core -- --listen 127.0.0.1:17600",
+          ),
         ],
       ),
     );

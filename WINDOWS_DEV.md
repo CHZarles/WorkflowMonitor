@@ -38,6 +38,27 @@ node dev/sync-to-windows.mjs /mnt/c/src/RecorderPhone
 
 你可以用仓库里的脚本把“Core / UI / Collector”快速拉起来：
 
+### 方案 A：Windows 本地 Core（不依赖 WSL，推荐）
+在 **Windows PowerShell** 一条命令启动：Core（本地）+ Windows Collector + Flutter UI：
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\run-desktop.ps1 -SendTitle
+```
+
+说明：
+- Core 会作为后台进程启动，监听 `http://127.0.0.1:17600`（日志在 `data\logs\core.log`）。
+- Collector 也会作为后台进程启动（日志在 `data\logs\collector.log`）。
+- UI 仍然是前台 `flutter run -d windows`。
+
+停止后台进程：
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\stop-agent.ps1
+```
+
+> 如果你想确保全部重启：`.\dev\run-desktop.ps1 -RestartAgent -SendTitle`
+
+### 方案 B：WSL 跑 Core（旧方案）
 在 **WSL** 启动 Core：
 ```bash
 cd /home/charles/RecorderPhone
@@ -49,6 +70,8 @@ bash dev/run-core.sh 127.0.0.1:17600
 cd C:\src\RecorderPhone
 powershell -ExecutionPolicy Bypass -File .\dev\run-ui.ps1
 ```
+
+如果你只启动了 UI，但 Core 没跑起来：你也可以在 UI 里 `Settings → Desktop agent (Windows)` 直接点击 `Start/Restart/Stop` 来启动/重启本机 Core + Collector（无需再开 WSL Core）。
 
 在 **Windows PowerShell** 启动 Windows Collector（会先 build，再运行；可选发送窗口标题）：
 ```powershell

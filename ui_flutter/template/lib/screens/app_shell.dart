@@ -4,6 +4,7 @@ import "package:flutter/material.dart";
 import "package:shared_preferences/shared_preferences.dart";
 
 import "../api/core_client.dart";
+import "../utils/desktop_agent.dart";
 import "search_screen.dart";
 import "settings_screen.dart";
 import "today_screen.dart";
@@ -34,6 +35,7 @@ class _AppShellState extends State<AppShell> {
   late CoreClient _client = CoreClient(baseUrl: _serverUrl);
   TrackingStatus? _tracking;
   Timer? _trackingTimer;
+  bool _agentStartAttempted = false;
 
   String _normalizeServerUrl(String input) {
     final trimmed = input.trim();
@@ -68,6 +70,11 @@ class _AppShellState extends State<AppShell> {
     }
     if (!mounted) return;
     setState(() => _ready = true);
+
+    // Best-effort: if Core is down and we're on Windows, try starting the local agent so the user
+    // doesn't need to run Core/Collector separately.
+    unawaited(_maybeStartLocalAgent());
+
     await _refreshTracking();
     _trackingTimer?.cancel();
     _trackingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
@@ -77,6 +84,45 @@ class _AppShellState extends State<AppShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeHandleInitialDeepLink();
     });
+  }
+
+  bool _isLocalhostServer() {
+    final uri = Uri.tryParse(_serverUrl.trim());
+    if (uri == null) return false;
+    final host = uri.host.trim().toLowerCase();
+    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+  }
+
+  Future<void> _maybeStartLocalAgent() async {
+    if (_agentStartAttempted) return;
+    _agentStartAttempted = true;
+
+    final agent = DesktopAgent.instance;
+    if (!agent.isAvailable) return;
+    if (!_isLocalhostServer()) return;
+
+    try {
+      final ok = await _client.health();
+      if (ok) return;
+    } catch (_) {
+      // ignore
+    }
+
+    final res = await agent.start(coreUrl: _serverUrl, restart: false, sendTitle: false);
+    if (!mounted) return;
+    if (!res.ok) {
+      final details = (res.message ?? "").trim();
+      if (details.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(duration: const Duration(seconds: 6), showCloseIcon: true, content: Text("Agent start failed: $details")),
+        );
+      }
+      return;
+    }
+
+    // Refresh tracking state after Core comes up.
+    await _refreshTracking();
+    _todayKey.currentState?.refresh(silent: true, triggerReminder: true);
   }
 
   void _maybeHandleInitialDeepLink() {
@@ -278,8 +324,10 @@ class _AppShellState extends State<AppShell> {
     setState(() {
       _serverUrl = normalized;
       _client = CoreClient(baseUrl: _serverUrl);
+      _agentStartAttempted = false;
     });
 
+    unawaited(_maybeStartLocalAgent());
     await _refreshTracking();
     _todayKey.currentState?.refresh();
     _searchKey.currentState?.refresh();

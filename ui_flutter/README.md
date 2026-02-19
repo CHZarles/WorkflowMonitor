@@ -43,6 +43,7 @@ flutter run -d windows
 ```
 
 > Android 真机/模拟器要访问桌面 Core，需要把 `Server URL` 改成桌面 IP（同一局域网），或后续做局域网配对。
+> 开发期更推荐用 `adb reverse` / 模拟器 `10.0.2.2`，见：`ANDROID_DEV.md`。
 
 你现在能看到的页面（模板实现）：
 - Today：Today Top（应用/域名聚合 + 图标 + 一键黑名单）+ Now（当前使用）+ Review due（到点复盘入口）
