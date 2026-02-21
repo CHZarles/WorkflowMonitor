@@ -59,6 +59,13 @@ android/        Android Compose 原型（已不作为主路径）
 `powershell -ExecutionPolicy Bypass -File .\\dev\\run-desktop.ps1 -SendTitle`
 > 详见：`WINDOWS_DEV.md`。
 
+### 方案 A3（Windows 打包版：只点一个 exe）
+在 Windows PowerShell 生成打包目录（会把 Core/Collector 放到 UI 旁边）：
+`powershell -ExecutionPolicy Bypass -File .\\dev\\package-windows.ps1 -InstallProtocol`
+
+然后双击运行：
+`dist\\windows\\RecorderPhone\\RecorderPhone.exe`
+
 ### 方案 B（仅用于扩展联调：不支持 UI）
 1. 在 WSL 启动简化接收服务：`node dev/ingest-server.mjs`
 2. 说明：该服务只提供 `/health`、`/event`、`/events`，不提供 `/settings`、`/blocks/today`、`/privacy/rules` 等接口  

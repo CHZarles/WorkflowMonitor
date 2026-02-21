@@ -101,14 +101,9 @@ class _AppShellState extends State<AppShell> {
     if (!agent.isAvailable) return;
     if (!_isLocalhostServer()) return;
 
-    try {
-      final ok = await _client.health();
-      if (ok) return;
-    } catch (_) {
-      // ignore
-    }
-
-    final res = await agent.start(coreUrl: _serverUrl, restart: false, sendTitle: false);
+    // Always best-effort "ensure" Core + Collector are running locally.
+    // This gives the one-click desktop experience in packaged mode.
+    final res = await agent.start(coreUrl: _serverUrl, restart: false, sendTitle: true);
     if (!mounted) return;
     if (!res.ok) {
       final details = (res.message ?? "").trim();

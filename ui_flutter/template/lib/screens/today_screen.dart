@@ -372,10 +372,36 @@ class TodayScreenState extends State<TodayScreen> {
 
   String _ruleKey(String kind, String value) => "$kind|$value";
 
+  String _normalizeDomainForRule(String raw) {
+    var d = raw.trim().toLowerCase();
+    if (d.startsWith("www.") && d.length > 4) d = d.substring(4);
+    return d;
+  }
+
+  bool _isBlockedDomain(String domain) {
+    final d = domain.trim().toLowerCase();
+    if (d.isEmpty) return false;
+
+    if (_blockedKeys.contains(_ruleKey("domain", d))) return true;
+
+    // Suffix match: a rule for `youtube.com` should also flag `www.youtube.com` / `m.youtube.com` as blocked.
+    var candidate = d;
+    while (true) {
+      final i = candidate.indexOf(".");
+      if (i <= 0) break;
+      final rest = candidate.substring(i + 1);
+      if (!rest.contains(".")) break;
+      candidate = rest;
+      if (_blockedKeys.contains(_ruleKey("domain", candidate))) return true;
+    }
+
+    return false;
+  }
+
   bool _isBlockedEntity({required String kind, required String entity}) {
     if (kind != "domain" && kind != "app") return false;
-    final value = kind == "domain" ? entity.toLowerCase() : entity;
-    return _blockedKeys.contains(_ruleKey(kind, value));
+    if (kind == "domain") return _isBlockedDomain(entity);
+    return _blockedKeys.contains(_ruleKey("app", entity));
   }
 
   Future<void> _loadRules() async {
@@ -406,7 +432,7 @@ class TodayScreenState extends State<TodayScreen> {
     required String displayName,
   }) async {
     if (kind != "domain" && kind != "app") return;
-    final value = kind == "domain" ? entity.toLowerCase() : entity;
+    final value = kind == "domain" ? _normalizeDomainForRule(entity) : entity;
     final key = _ruleKey(kind, value);
 
     if (_blockedKeys.contains(key)) {
@@ -685,6 +711,41 @@ class TodayScreenState extends State<TodayScreen> {
     if (ok == true) {
       await refresh(silent: true, triggerReminder: false);
     }
+  }
+
+  BlockSummary? _findBlockForTimelineBar(DayTimelineBar bar) {
+    DateTime startUtc;
+    DateTime endUtc;
+    try {
+      startUtc = DateTime.parse(bar.startTs).toUtc();
+      endUtc = DateTime.parse(bar.endTs).toUtc();
+    } catch (_) {
+      return null;
+    }
+    if (!endUtc.isAfter(startUtc)) return null;
+
+    var bestOverlap = 0;
+    BlockSummary? best;
+    for (final b in _blocks) {
+      DateTime bs;
+      DateTime be;
+      try {
+        bs = DateTime.parse(b.startTs).toUtc();
+        be = DateTime.parse(b.endTs).toUtc();
+      } catch (_) {
+        continue;
+      }
+      if (!be.isAfter(bs)) continue;
+
+      final overlapStart = startUtc.isAfter(bs) ? startUtc : bs;
+      final overlapEnd = endUtc.isBefore(be) ? endUtc : be;
+      final sec = overlapEnd.difference(overlapStart).inSeconds;
+      if (sec > bestOverlap) {
+        bestOverlap = sec;
+        best = b;
+      }
+    }
+    return bestOverlap > 0 ? best : null;
   }
 
   Future<void> _maybePromptDueBlock(BlockSummary b) async {
@@ -1386,27 +1447,67 @@ class TodayScreenState extends State<TodayScreen> {
     }
 
     Widget row({
-      required IconData icon,
+      required String kind, // "app" | "domain"
       required String label,
       required EventRecord e,
       required VoidCallback onTap,
+      IconData? leadingIcon,
+      IconData? trailingIcon,
     }) {
-      final title = displayEntity(e.entity);
+      final entityRaw = (e.entity ?? "").trim();
+      final entity = kind == "domain" ? entityRaw.toLowerCase() : entityRaw;
+      final base = displayEntity(entityRaw);
       final when = _ageText(e.ts);
-      final detail = (e.title ?? "").trim();
+      final rawDetail = (e.title ?? "").trim();
+
+      String titleText = "$label · $base";
+      String subtitleText = rawDetail.isEmpty ? when : "$when · $rawDetail";
+
+      if (kind == "domain") {
+        final domain = entity;
+        final normTitle = (_coreStoreTitles && rawDetail.isNotEmpty) ? normalizeWebTitle(domain, rawDetail) : "";
+        if (normTitle.isNotEmpty) {
+          titleText = "$label · $normTitle";
+          subtitleText = "$when · ${displayEntity(domain)}";
+        } else {
+          titleText = "$label · ${displayEntity(domain)}";
+        }
+      } else {
+        final appLabel = displayEntity(entity);
+        final isBrowser = _isBrowserLabel(appLabel);
+        if (_coreStoreTitles && rawDetail.isNotEmpty && !isBrowser) {
+          final labelLc = appLabel.toLowerCase();
+          final isVscode = labelLc == "code" || labelLc == "vscode" || rawDetail.contains("Visual Studio Code");
+          if (isVscode) {
+            final ws = extractVscodeWorkspace(rawDetail);
+            if (ws != null && ws.trim().isNotEmpty) {
+              subtitleText = "$when · Workspace: ${ws.trim()}";
+            }
+          }
+        }
+      }
+
+      final scheme = Theme.of(context).colorScheme;
       return ListTile(
         isThreeLine: true,
         minVerticalPadding: RecorderTokens.space2,
         contentPadding: EdgeInsets.zero,
-        leading: Icon(icon, size: 18),
+        leading: EntityAvatar(
+          kind: kind,
+          entity: entity,
+          label: base,
+          icon: kind == "app" ? leadingIcon : null,
+        ),
+        trailing:
+            trailingIcon == null ? null : Icon(trailingIcon, size: 18, color: scheme.onSurfaceVariant),
         title: Text(
-          "$label · $title",
+          titleText,
           style: Theme.of(context).textTheme.bodyLarge,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: Text(
-          detail.isEmpty ? when : "$when · $detail",
+          subtitleText,
           style: Theme.of(context).textTheme.labelMedium,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -1434,16 +1535,18 @@ class TodayScreenState extends State<TodayScreen> {
             ),
             if (app != null)
               row(
-                icon: Icons.apps,
+                kind: "app",
                 label: "Focus app",
                 e: app,
+                leadingIcon: _iconForAppLabel(displayEntity(app.entity)),
                 onTap: () => _openReviewForEntity(kind: "app", entity: app.entity, label: displayEntity(app.entity)),
               ),
             if (usingTab != null)
               row(
-                icon: usingTabIcon,
+                kind: "domain",
                 label: "Using tab",
                 e: usingTab,
+                trailingIcon: usingTabIcon,
                 onTap: () {
                   final domain = (usingTab.entity ?? "").trim();
                   final rawTitle = (usingTab.title ?? "").trim();
@@ -1463,9 +1566,11 @@ class TodayScreenState extends State<TodayScreen> {
               ),
             if (showAppAudio && !hideAppAudio)
               row(
-                icon: Icons.headphones,
+                kind: "app",
                 label: "Background audio",
                 e: appAudio!,
+                leadingIcon: _iconForAppLabel(displayEntity(appAudio.entity)),
+                trailingIcon: Icons.headphones,
                 onTap: () => _openReviewForEntity(kind: "app", entity: appAudio.entity, label: displayEntity(appAudio.entity)),
               ),
           ],
@@ -1583,6 +1688,8 @@ class TodayScreenState extends State<TodayScreen> {
           endMinute: endMin,
           audio: audio,
           tooltip: audio ? "$tipHead\n$time · audio" : "$tipHead\n$time",
+          startTs: s.startTs,
+          endTs: s.endTs,
         ),
       );
     }
@@ -1975,6 +2082,18 @@ class TodayScreenState extends State<TodayScreen> {
                 final label = preferWorkspace ? subtitle : lane.label;
                 _openReviewForEntity(kind: lane.kind, entity: lane.entity, label: label);
               },
+              onBarTap: (_, bar) {
+                final b = _findBlockForTimelineBar(bar);
+                if (b == null) {
+                  final messenger = ScaffoldMessenger.of(context);
+                  messenger.clearSnackBars();
+                  messenger.showSnackBar(
+                    const SnackBar(duration: Duration(seconds: 3), showCloseIcon: true, content: Text("No matching block")),
+                  );
+                  return;
+                }
+                unawaited(_openBlock(b));
+              },
             ),
             if (lanes.isNotEmpty) ...[
               const SizedBox(height: RecorderTokens.space2),
@@ -1982,14 +2101,14 @@ class TodayScreenState extends State<TodayScreen> {
                 children: [
                   Icon(Icons.touch_app_outlined, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
-                  Expanded(
-                    child: Text(
-                      "Tip: tap a lane to filter blocks in Review.",
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
+                      Expanded(
+                        child: Text(
+                          "Tip: tap a bar to open its block. Tap a lane to filter Review.",
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
             ],
             if (!_coreStoreTitles) ...[
               const SizedBox(height: RecorderTokens.space2),

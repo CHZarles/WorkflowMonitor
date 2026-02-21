@@ -33,6 +33,14 @@ cd C:\src\RecorderPhone
 powershell -ExecutionPolicy Bypass -File .\dev\stop-agent.ps1
 ```
 
+## 方案 B.6（推荐）：Windows 打包版（只点一个 exe）
+先在 Windows PowerShell 生成打包目录：
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\package-windows.ps1 -InstallProtocol
+```
+然后双击运行：`dist\windows\RecorderPhone\RecorderPhone.exe`。
+
 ## 方案 C：自动同步到 Windows 路径（“async”/长期推荐）
 如果你想 **在 WSL 编辑**，但让 **Windows 侧构建/运行**（Collector/Flutter Windows）更稳/性能更好，用 rsync 自动镜像：
 ```bash

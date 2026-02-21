@@ -29,12 +29,16 @@ class DayTimelineBar {
     required this.endMinute,
     required this.audio,
     required this.tooltip,
+    required this.startTs,
+    required this.endTs,
   });
 
   final int startMinute; // 0..1440
   final int endMinute; // 0..1440
   final bool audio;
   final String tooltip;
+  final String startTs; // RFC3339 (UTC)
+  final String endTs; // RFC3339 (UTC)
 }
 
 class DayTimeline extends StatelessWidget {
@@ -42,10 +46,11 @@ class DayTimeline extends StatelessWidget {
     super.key,
     required this.lanes,
     this.labelWidth = 220,
-    this.laneHeight = 52,
+    this.laneHeight = 56,
     this.barHeight = 18,
     this.showNowIndicator = true,
     this.onLaneTap,
+    this.onBarTap,
   });
 
   final List<DayTimelineLane> lanes;
@@ -54,6 +59,7 @@ class DayTimeline extends StatelessWidget {
   final double barHeight;
   final bool showNowIndicator;
   final void Function(DayTimelineLane lane)? onLaneTap;
+  final void Function(DayTimelineLane lane, DayTimelineBar bar)? onBarTap;
 
   List<int> _majorTicksMinutes() => const [0, 360, 720, 1080, 1440];
   List<int> _minorTicksMinutes() => List<int>.generate(23, (i) => (i + 1) * 60);
@@ -192,12 +198,23 @@ class DayTimeline extends StatelessWidget {
                   height: barHeight,
                   child: Tooltip(
                     message: bar.tooltip,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: _barColor(scheme, lanes[i].kind, bar.audio),
-                        borderRadius: BorderRadius.circular(6),
-                        border:
-                            bar.audio ? Border.all(color: scheme.onSurface.withValues(alpha: 0.20), width: 1) : null,
+                    child: MouseRegion(
+                      cursor: onBarTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: onBarTap == null ? null : () => onBarTap?.call(lanes[i], bar),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Ink(
+                            decoration: BoxDecoration(
+                              color: _barColor(scheme, lanes[i].kind, bar.audio),
+                              borderRadius: BorderRadius.circular(6),
+                              border: bar.audio
+                                  ? Border.all(color: scheme.onSurface.withValues(alpha: 0.20), width: 1)
+                                  : null,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),

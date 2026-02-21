@@ -110,7 +110,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final res = await agent.start(
         coreUrl: widget.serverUrl,
         restart: restart,
-        sendTitle: _storeTitles,
+        // Collector can always send titles; Core controls whether to store them via privacy level.
+        sendTitle: true,
       );
       if (!mounted) return;
       final msg = res.ok ? "Agent started" : "Agent start failed";
@@ -855,13 +856,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     : "Set Server URL to http://127.0.0.1:17600 to use the local agent.",
                                 style: Theme.of(context).textTheme.labelMedium,
                               ),
-                              if (_storeTitles) ...[
-                                const SizedBox(height: 2),
-                                Text(
-                                  "L2 is ON → Agent will start Collector with --send-title.",
-                                  style: Theme.of(context).textTheme.labelMedium,
-                                ),
-                              ],
+                              const SizedBox(height: 2),
+                              Text(
+                                "Tip: enable Privacy L2 (Store titles) to see YouTube video titles / VS Code workspace names.",
+                                style: Theme.of(context).textTheme.labelMedium,
+                              ),
                             ],
                           ),
                         ),

@@ -24,6 +24,9 @@ data/
 # Rust
 target/
 
+# Dist / packaging
+dist/
+
 # Flutter (when generated)
 ui_flutter/**/.dart_tool/
 ui_flutter/**/build/

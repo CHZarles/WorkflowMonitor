@@ -208,7 +208,27 @@ powershell -ExecutionPolicy Bypass -File .\dev\install-recorderphone-protocol.ps
 
 ## 7) 打包模式（桌面应用形态）
 
-当你把 `recorder_core.exe` 与 `windows_collector.exe` **打包在 UI 旁边**（同目录或 `bin/`）时，UI 的 `Settings → Desktop agent (Windows)` 会优先使用这些二进制启动 Core/Collector（不依赖 repoRoot、不依赖 PowerShell）。
+目标：做成**点开一个 exe**（RecorderPhone）就能自动拉起本机 `recorder_core` + `windows_collector`，不需要你手动跑 WSL Core / PowerShell 脚本。
+
+### 一条命令打包（推荐）
+在 **Windows PowerShell** 可整段复制：
+
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\package-windows.ps1 -InstallProtocol
+```
+
+产物目录：
+- `C:\src\RecorderPhone\dist\windows\RecorderPhone\RecorderPhone.exe`
+
+运行方式：
+- 直接双击 `RecorderPhone.exe`
+- 默认 `Server URL` 是 `http://127.0.0.1:17600`，UI 启动后会 **best-effort 自动确保本机 Agent 运行**（Core/Collector 都会起来）。
+
+> `-InstallProtocol` 是为了让 Windows Toast 的按钮（Quick Review / Skip / Pause）可以通过 `recorderphone://...` 直达 UI；如果你暂时不需要 Toast 深链，可以去掉它。
+
+### 打包约定（UI 如何识别“打包模式”）
+当 `recorder_core.exe` 与 `windows_collector.exe` **放在 UI exe 同目录**（或同目录的 `bin/`）时，UI 会优先用这些二进制启动 Core/Collector（不依赖 repoRoot、不依赖 PowerShell）。
 
 数据落盘位置：
 - DB：`%LOCALAPPDATA%\\RecorderPhone\\recorder-core.db`

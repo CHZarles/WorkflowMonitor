@@ -40,7 +40,9 @@ const EXCLUDED_DIR_NAMES = new Set([
   "build",
   ".gradle",
   ".kotlin",
-  "data"
+  "data",
+  // Local Windows packaging output (do not delete when mirroring).
+  "dist"
 ]);
 
 const EXCLUDE_GLOBS = [
@@ -58,7 +60,9 @@ const EXCLUDE_GLOBS = [
   // Local-only Flutter working copy created on Windows side.
   // It is derived from `ui_flutter/template/` and should not be deleted by mirroring.
   "recorderphone_ui/",
-  "data/"
+  "data/",
+  // Local Windows packaging output (do not delete when mirroring).
+  "dist/"
 ];
 
 function isExcludedDir(dirName) {

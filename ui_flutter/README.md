@@ -54,8 +54,15 @@ flutter run -d windows
 
 UI 内置的 `Desktop agent (Windows)` 现在会 **优先使用“打包在应用目录旁”的二进制** 来启动 Core/Collector（不依赖 repoRoot、不依赖 PowerShell 脚本）。
 
+推荐直接用打包脚本生成可分发目录（会把 Core/Collector 放到 UI 旁边）：
+
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\package-windows.ps1 -InstallProtocol
+```
+
 约定：
-- 把 `recorder_core.exe` 与 `windows_collector.exe` 放到 `recorderphone_ui.exe` 同目录，或放到同目录下的 `bin/`。
+- 把 `recorder_core.exe` 与 `windows_collector.exe` 放到 UI exe（`RecorderPhone.exe` / `recorderphone_ui.exe`）同目录，或放到同目录下的 `bin/`。
 - UI 会用 `Server URL` 的 host/port（默认 `http://127.0.0.1:17600`）启动 Core，并把数据库写到：
   - `%LOCALAPPDATA%\\RecorderPhone\\recorder-core.db`（以及 `%LOCALAPPDATA%\\RecorderPhone\\agent-pids.json`）
 

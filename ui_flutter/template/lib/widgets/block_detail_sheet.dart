@@ -71,10 +71,35 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
 
   String _ruleKey(String kind, String value) => "$kind|$value";
 
+  String _normalizeDomainForRule(String raw) {
+    var d = raw.trim().toLowerCase();
+    if (d.startsWith("www.") && d.length > 4) d = d.substring(4);
+    return d;
+  }
+
+  bool _isBlockedDomain(String domain) {
+    final d = domain.trim().toLowerCase();
+    if (d.isEmpty) return false;
+
+    if (_blockedKeys.contains(_ruleKey("domain", d))) return true;
+
+    var candidate = d;
+    while (true) {
+      final i = candidate.indexOf(".");
+      if (i <= 0) break;
+      final rest = candidate.substring(i + 1);
+      if (!rest.contains(".")) break;
+      candidate = rest;
+      if (_blockedKeys.contains(_ruleKey("domain", candidate))) return true;
+    }
+
+    return false;
+  }
+
   bool _isBlockedEntity({required String kind, required String entity}) {
     if (kind != "domain" && kind != "app") return false;
-    final value = kind == "domain" ? entity.toLowerCase() : entity;
-    return _blockedKeys.contains(_ruleKey(kind, value));
+    if (kind == "domain") return _isBlockedDomain(entity);
+    return _blockedKeys.contains(_ruleKey("app", entity));
   }
 
   String _guessKind(String value) {
@@ -275,7 +300,7 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
     required String displayName,
   }) async {
     if (kind != "domain" && kind != "app") return;
-    final value = kind == "domain" ? entity.toLowerCase() : entity;
+    final value = kind == "domain" ? _normalizeDomainForRule(entity) : entity;
     final key = _ruleKey(kind, value);
 
     if (_blockedKeys.contains(key)) {
