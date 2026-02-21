@@ -93,6 +93,9 @@ cd C:\src\RecorderPhone
 # 用模板覆盖真实工程的 lib/（会删除 lib/ 下模板没有的文件）
 robocopy .\ui_flutter\template\lib .\recorderphone_ui\lib /MIR
 
+# 同步模板 assets/（例如托盘图标 tray.ico）
+robocopy .\ui_flutter\template\assets .\recorderphone_ui\assets /MIR
+
 # 覆盖 pubspec.yaml（PowerShell 用 Copy-Item，别用 copy /Y）
 Copy-Item -Force .\ui_flutter\template\pubspec.yaml .\recorderphone_ui\pubspec.yaml
 
@@ -217,6 +220,10 @@ powershell -ExecutionPolicy Bypass -File .\dev\install-recorderphone-protocol.ps
 cd C:\src\RecorderPhone
 powershell -ExecutionPolicy Bypass -File .\dev\package-windows.ps1 -InstallProtocol
 ```
+
+说明：
+- 该脚本会 best-effort 停掉正在运行的 `RecorderPhone.exe / recorder_core.exe / windows_collector.exe`，并清理输出目录后重新拷贝（避免“extra files / 拒绝访问”）。
+- 若仍提示文件被占用：先退出 RecorderPhone（托盘里 Exit），或执行：`powershell -ExecutionPolicy Bypass -File .\dev\stop-agent.ps1 -KillAllByName`，再重试打包。
 
 产物目录：
 - `C:\src\RecorderPhone\dist\windows\RecorderPhone\RecorderPhone.exe`

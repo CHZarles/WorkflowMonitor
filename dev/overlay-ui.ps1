@@ -2,6 +2,8 @@ param(
   [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 )
 
+$ErrorActionPreference = "Stop"
+
 Set-Location $RepoRoot
 
 Write-Host "[overlay-ui] repo: $RepoRoot"
@@ -10,12 +12,33 @@ if (-not (Test-Path ".\\ui_flutter\\template\\lib")) {
   throw "Missing ui_flutter\\template\\lib. Run from the RecorderPhone repo."
 }
 
+if (-not (Test-Path ".\\ui_flutter\\template\\assets")) {
+  throw "Missing ui_flutter\\template\\assets. Run from the RecorderPhone repo."
+}
+
 if (-not (Test-Path ".\\recorderphone_ui")) {
   throw "Missing recorderphone_ui. Create the Flutter project on Windows first."
 }
 
+function Invoke-RobocopyMirror {
+  param(
+    [Parameter(Mandatory = $true)][string]$From,
+    [Parameter(Mandatory = $true)][string]$To
+  )
+
+  # Avoid the default "retry forever" behaviour.
+  robocopy $From $To /MIR /R:3 /W:1 | Out-Host
+  $code = $LASTEXITCODE
+  if ($code -ge 8) {
+    throw "robocopy failed with exit code $code"
+  }
+}
+
 Write-Host "[overlay-ui] robocopy template\\lib -> recorderphone_ui\\lib"
-robocopy ".\\ui_flutter\\template\\lib" ".\\recorderphone_ui\\lib" /MIR | Out-Host
+Invoke-RobocopyMirror -From ".\\ui_flutter\\template\\lib" -To ".\\recorderphone_ui\\lib"
+
+Write-Host "[overlay-ui] robocopy template\\assets -> recorderphone_ui\\assets"
+Invoke-RobocopyMirror -From ".\\ui_flutter\\template\\assets" -To ".\\recorderphone_ui\\assets"
 
 Write-Host "[overlay-ui] copy template\\pubspec.yaml -> recorderphone_ui\\pubspec.yaml"
 Copy-Item -Force ".\\ui_flutter\\template\\pubspec.yaml" ".\\recorderphone_ui\\pubspec.yaml"

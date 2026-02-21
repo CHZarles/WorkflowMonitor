@@ -3,6 +3,7 @@ const DEFAULTS = {
   serverUrl: "http://127.0.0.1:17600",
   sendTitle: false,
   trackBackgroundAudio: true,
+  keepAlive: true,
   heartbeatSeconds: 60
 };
 
@@ -20,6 +21,7 @@ const STATE = {
 };
 
 let _stateLoaded = false;
+let _offscreenSyncing = null;
 
 function nowIso() {
   return new Date().toISOString();
@@ -117,6 +119,50 @@ async function getSettings() {
   return { ...DEFAULTS, ...stored };
 }
 
+async function syncOffscreenDocument(settings) {
+  if (!chrome.offscreen || typeof chrome.offscreen.hasDocument !== "function") return;
+
+  const desired = settings.enabled !== false && settings.keepAlive !== false;
+
+  if (_offscreenSyncing) return _offscreenSyncing;
+
+  _offscreenSyncing = (async () => {
+    let has = false;
+    try {
+      has = await chrome.offscreen.hasDocument();
+    } catch {
+      has = false;
+    }
+
+    if (!desired) {
+      if (!has) return;
+      try {
+        await chrome.offscreen.closeDocument();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    if (has) return;
+
+    try {
+      const reason = chrome.offscreen?.Reason?.DOM_PARSER ?? "DOM_PARSER";
+      await chrome.offscreen.createDocument({
+        url: "offscreen.html",
+        reasons: [reason],
+        justification: "Keep the service worker responsive for reliable tab/audio tracking."
+      });
+    } catch {
+      // ignore (API may be unavailable in some browsers)
+    }
+  })().finally(() => {
+    _offscreenSyncing = null;
+  });
+
+  return _offscreenSyncing;
+}
+
 async function setStatus(partial) {
   const base = {
     ts: nowIso(),
@@ -208,6 +254,7 @@ async function emitActiveTabEvent({ force = false } = {}) {
   await ensureStateLoaded();
 
   const settings = await getSettings();
+  await syncOffscreenDocument(settings);
   if (!settings.enabled) return;
 
   await ensureHeartbeatAlarm();
@@ -373,6 +420,7 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     changes.serverUrl ||
     changes.sendTitle ||
     changes.trackBackgroundAudio ||
+    changes.keepAlive ||
     changes.heartbeatSeconds
   ) {
     await emitActiveTabEventSafe({ force: true });
@@ -381,6 +429,14 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const type = msg && typeof msg === "object" ? msg.type : null;
+  if (type === "keepAlivePing") {
+    ensureHeartbeatAlarm()
+      .then(() => emitActiveTabEventSafe())
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
   if (type !== "forceEmit") return;
 
   emitActiveTabEventSafe({ force: true })

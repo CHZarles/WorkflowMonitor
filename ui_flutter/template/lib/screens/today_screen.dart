@@ -139,6 +139,12 @@ class TodayScreenState extends State<TodayScreen> {
   List<TimelineSegment> _segments = const [];
   List<BlockSummary> _blocks = const [];
   BlockSummary? _dueBlock;
+  int _nowFocusTtlSeconds = 3 * 60;
+  int _nowAudioTtlSeconds = 120;
+  int? _latestAnyAgeSeconds;
+  EventRecord? _nowFocusApp;
+  EventRecord? _nowUsingTab;
+  EventRecord? _nowBackgroundAudio;
   EventRecord? _latestAppEvent;
   EventRecord? _latestTabEvent;
   EventRecord? _latestAudioEvent;
@@ -154,6 +160,8 @@ class TodayScreenState extends State<TodayScreen> {
   bool _refreshingBlocks = false;
   bool _timelineShowAll = false;
   bool _timelineSortByTime = false;
+  double _timelineZoom = 1.0;
+  final ScrollController _timelineH = ScrollController();
   DateTime? _nowUpdatedAt;
   DateTime? _blocksUpdatedAt;
   int? _lastAnyEventId;
@@ -197,6 +205,7 @@ class TodayScreenState extends State<TodayScreen> {
   void dispose() {
     _nowTimer?.cancel();
     _blocksTimer?.cancel();
+    _timelineH.dispose();
     super.dispose();
   }
 
@@ -279,6 +288,10 @@ class TodayScreenState extends State<TodayScreen> {
     setState(() {
       _day = next;
       if (!viewingToday) {
+        _latestAnyAgeSeconds = null;
+        _nowFocusApp = null;
+        _nowUsingTab = null;
+        _nowBackgroundAudio = null;
         _latestAppEvent = null;
         _latestTabEvent = null;
         _latestAudioEvent = null;
@@ -819,6 +832,12 @@ class TodayScreenState extends State<TodayScreen> {
     try {
       final snap = await widget.client.now();
       final latestAnyId = snap.latestEventId;
+      final latestAnyAgeSeconds = snap.latestEventAgeSeconds;
+      final focusTtlSeconds = snap.focusTtlSeconds;
+      final audioTtlSeconds = snap.audioTtlSeconds;
+      final nowFocusApp = snap.nowFocusApp;
+      final nowUsingTab = snap.nowUsingTab;
+      final nowBackgroundAudio = snap.nowBackgroundAudio;
       final latestApp = snap.appActive;
       final latestTab = snap.tabFocus;
       final latestAudio = snap.tabAudio;
@@ -837,6 +856,12 @@ class TodayScreenState extends State<TodayScreen> {
           (_lastAutoBlocksRefreshAt == null ||
               now.difference(_lastAutoBlocksRefreshAt!) > const Duration(seconds: 10));
       setState(() {
+        _nowFocusTtlSeconds = focusTtlSeconds;
+        _nowAudioTtlSeconds = audioTtlSeconds;
+        _latestAnyAgeSeconds = latestAnyAgeSeconds;
+        _nowFocusApp = nowFocusApp;
+        _nowUsingTab = nowUsingTab;
+        _nowBackgroundAudio = nowBackgroundAudio;
         _latestAppEvent = latestApp;
         _latestTabEvent = latestTab;
         _latestAudioEvent = latestAudio;
@@ -976,6 +1001,17 @@ class TodayScreenState extends State<TodayScreen> {
     if (d.inMinutes < 1) return "${d.inSeconds}s ago";
     if (d.inHours < 1) return "${d.inMinutes}m ago";
     return "${d.inHours}h ago";
+  }
+
+  String _shortAgeFromSeconds(int seconds) {
+    final s = seconds.clamp(0, 365 * 24 * 60 * 60);
+    if (s < 60) return "${s}s";
+    final m = (s / 60).floor();
+    if (m < 60) return "${m}m";
+    final h = (m / 60).floor();
+    if (h < 24) return "${h}h";
+    final d = (h / 24).floor();
+    return "${d}d";
   }
 
   int _countReviewedBlocks() {
@@ -1346,13 +1382,15 @@ class TodayScreenState extends State<TodayScreen> {
       }
     }
 
-    const focusFreshness = Duration(minutes: 3);
-    final app = (_latestAppEvent != null && isFresh(_latestAppEvent!, focusFreshness)) ? _latestAppEvent : null;
-    final tab = (_latestTabEvent != null && isFresh(_latestTabEvent!, focusFreshness)) ? _latestTabEvent : null;
+    final focusFreshness = Duration(seconds: _nowFocusTtlSeconds.clamp(10, 3600));
+    final rawApp = (_latestAppEvent != null && isFresh(_latestAppEvent!, focusFreshness)) ? _latestAppEvent : null;
+    final rawTab = (_latestTabEvent != null && isFresh(_latestTabEvent!, focusFreshness)) ? _latestTabEvent : null;
     final audio = _latestAudioEvent;
     final audioStop = _latestAudioStopEvent;
     final appAudio = _latestAppAudioEvent;
     final appAudioStop = _latestAppAudioStopEvent;
+
+    final app = _nowFocusApp ?? rawApp;
 
     bool showAudioNow() {
       if (audio == null) return false;
@@ -1371,7 +1409,7 @@ class TodayScreenState extends State<TodayScreen> {
       // Fallback: hide "now" audio when the last audio event is stale.
       try {
         final a = DateTime.parse(audio.ts).toLocal();
-        if (DateTime.now().difference(a) > const Duration(seconds: 120)) return false;
+        if (DateTime.now().difference(a) > Duration(seconds: _nowAudioTtlSeconds.clamp(30, 3600))) return false;
       } catch (_) {
         // ignore
       }
@@ -1396,7 +1434,7 @@ class TodayScreenState extends State<TodayScreen> {
 
       try {
         final a = DateTime.parse(appAudio.ts).toLocal();
-        if (DateTime.now().difference(a) > const Duration(seconds: 120)) return false;
+        if (DateTime.now().difference(a) > Duration(seconds: _nowAudioTtlSeconds.clamp(30, 3600))) return false;
       } catch (_) {
         // ignore
       }
@@ -1405,24 +1443,33 @@ class TodayScreenState extends State<TodayScreen> {
     }
 
     final showAppAudio = showAppAudioNow();
-    final appLabelLc = app == null ? "" : displayEntity(app.entity).toLowerCase();
-    final appSaysBrowserFocused = app != null &&
-        (appLabelLc == "chrome" ||
-            appLabelLc == "msedge" ||
-            appLabelLc == "edge" ||
-            appLabelLc == "brave" ||
-            appLabelLc == "vivaldi" ||
-            appLabelLc == "opera" ||
-            appLabelLc == "firefox");
-    final browserFocused = appSaysBrowserFocused || (app == null && tab != null);
 
-    final usingTab = browserFocused ? tab : (showAudio ? audio : null);
-    final usingTabIcon = browserFocused ? Icons.public : Icons.headphones;
+    final rawUsingTab = (() {
+      final appLabelLc = rawApp == null ? "" : displayEntity(rawApp.entity).toLowerCase();
+      final appSaysBrowserFocused = rawApp != null &&
+          (appLabelLc == "chrome" ||
+              appLabelLc == "msedge" ||
+              appLabelLc == "edge" ||
+              appLabelLc == "brave" ||
+              appLabelLc == "vivaldi" ||
+              appLabelLc == "opera" ||
+              appLabelLc == "firefox");
+      final browserFocused = appSaysBrowserFocused || (rawApp == null && rawTab != null);
+      return browserFocused ? rawTab : (showAudio ? audio : null);
+    })();
+
+    final usingTab = _nowUsingTab ?? rawUsingTab;
+    final usingTabIcon = usingTab?.activity == "audio" ? Icons.headphones : Icons.public;
 
     final usingTabMissingTitle =
         usingTab != null && usingTab.event == "tab_active" && ((usingTab.title ?? "").trim().isEmpty);
 
-    if (app == null && usingTab == null && !(showAppAudio && appAudio != null)) {
+    final bgAudio = _nowBackgroundAudio ?? (showAppAudio ? appAudio : null);
+    final showBgAudio = bgAudio != null;
+
+    if (app == null && usingTab == null && !showBgAudio) {
+      final age = _latestAnyAgeSeconds;
+      final ageHint = age == null ? "" : "Last event: ${_shortAgeFromSeconds(age)} ago.";
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(RecorderTokens.space4),
@@ -1432,7 +1479,9 @@ class TodayScreenState extends State<TodayScreen> {
               Text("Now", style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: RecorderTokens.space2),
               Text(
-                "No recent activity yet.\nTip: switch apps or tabs to generate events.",
+                ageHint.isEmpty
+                    ? "No recent activity yet.\nTip: switch apps or tabs to generate events."
+                    : "No fresh activity right now.\n$ageHint",
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: RecorderTokens.space2),
@@ -1516,7 +1565,9 @@ class TodayScreenState extends State<TodayScreen> {
       );
     }
 
-    final hideAppAudio = app != null && appAudio != null && displayEntity(app.entity) == displayEntity(appAudio.entity);
+    final hideAppAudio = app != null &&
+        bgAudio != null &&
+        displayEntity(app.entity) == displayEntity(bgAudio.entity);
 
     return Card(
       child: Padding(
@@ -1564,14 +1615,18 @@ class TodayScreenState extends State<TodayScreen> {
                   style: Theme.of(context).textTheme.labelMedium,
                 ),
               ),
-            if (showAppAudio && !hideAppAudio)
+            if (bgAudio != null && !hideAppAudio)
               row(
                 kind: "app",
                 label: "Background audio",
-                e: appAudio!,
-                leadingIcon: _iconForAppLabel(displayEntity(appAudio.entity)),
+                e: bgAudio,
+                leadingIcon: _iconForAppLabel(displayEntity(bgAudio.entity)),
                 trailingIcon: Icons.headphones,
-                onTap: () => _openReviewForEntity(kind: "app", entity: appAudio.entity, label: displayEntity(appAudio.entity)),
+                onTap: () => _openReviewForEntity(
+                  kind: "app",
+                  entity: bgAudio.entity,
+                  label: displayEntity(bgAudio.entity),
+                ),
               ),
           ],
         ),
@@ -1587,6 +1642,58 @@ class TodayScreenState extends State<TodayScreen> {
     final h = (minute ~/ 60).clamp(0, 24).toString().padLeft(2, "0");
     final m = (minute % 60).clamp(0, 59).toString().padLeft(2, "0");
     return "$h:$m";
+  }
+
+  void _setTimelineZoom(double z, {bool preserveCenter = true, bool resetScroll = false}) {
+    final next = z.clamp(1.0, 4.0);
+    if ((next - _timelineZoom).abs() < 0.001) return;
+
+    final double? centerFrac = (() {
+      if (!preserveCenter) return null;
+      if (!_timelineH.hasClients) return null;
+      final pos = _timelineH.position;
+      final viewport = pos.viewportDimension;
+      final content = pos.maxScrollExtent + viewport;
+      if (content <= 0) return null;
+      return ((pos.pixels + viewport / 2) / content).clamp(0.0, 1.0);
+    })();
+
+    setState(() => _timelineZoom = next);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_timelineH.hasClients) return;
+      final pos = _timelineH.position;
+      if (resetScroll || next <= 1.01) {
+        pos.jumpTo(0.0);
+        return;
+      }
+      final frac = centerFrac;
+      if (frac == null) return;
+      final viewport = pos.viewportDimension;
+      final content = pos.maxScrollExtent + viewport;
+      final centerX = content * frac;
+      final target = (centerX - viewport / 2).clamp(0.0, pos.maxScrollExtent);
+      pos.jumpTo(target);
+    });
+  }
+
+  void _timelineZoomIn() => _setTimelineZoom(_timelineZoom * 1.25);
+
+  void _timelineZoomOut() => _setTimelineZoom(_timelineZoom / 1.25);
+
+  void _timelineResetView() => _setTimelineZoom(1.0, preserveCenter: false, resetScroll: true);
+
+  void _timelineCenterOnNow() {
+    if (!_timelineH.hasClients) return;
+    final now = DateTime.now();
+    final dayStart = DateTime(now.year, now.month, now.day);
+    final nowMin = now.difference(dayStart).inMinutes.clamp(0, 1440);
+    final pos = _timelineH.position;
+    final viewport = pos.viewportDimension;
+    final content = pos.maxScrollExtent + viewport;
+    final x = content * (nowMin / 1440.0);
+    final target = (x - viewport / 2).clamp(0.0, pos.maxScrollExtent);
+    pos.animateTo(target, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
   }
 
   List<DayTimelineLane> _buildTimelineLanesAll() {
@@ -1641,7 +1748,7 @@ class TodayScreenState extends State<TodayScreen> {
         } else {
           laneKey = "domain|$domain";
           label = displayEntity(domain);
-          subtitle = null;
+          subtitle = _subtitleForDomainEntity(domain);
         }
         icon = Icons.public;
       } else {
@@ -2042,6 +2149,7 @@ class TodayScreenState extends State<TodayScreen> {
     final showWeb = _topFilter != _TopFilter.apps;
     final hasWebSeg = _segments.any((s) => s.kind == "domain");
     final hasWebTitleSeg = _segments.any((s) => s.kind == "domain" && (s.title ?? "").trim().isNotEmpty);
+    final canScrollH = _timelineZoom > 1.01;
 
     return Card(
       child: Padding(
@@ -2051,18 +2159,43 @@ class TodayScreenState extends State<TodayScreen> {
           children: [
             Row(
               children: [
-                Expanded(
-                  child: Text("Timeline", style: Theme.of(context).textTheme.titleMedium),
-                ),
-                Text(
-                  "Updated ${_updatedAge(_blocksUpdatedAt)}",
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
-                const SizedBox(width: RecorderTokens.space2),
+                Expanded(child: Text("Timeline", style: Theme.of(context).textTheme.titleMedium)),
+                Text("Updated ${_updatedAge(_blocksUpdatedAt)}", style: Theme.of(context).textTheme.labelMedium),
+              ],
+            ),
+            const SizedBox(height: RecorderTokens.space2),
+            Wrap(
+              spacing: RecorderTokens.space2,
+              runSpacing: 0,
+              children: [
                 TextButton.icon(
                   onPressed: () => setState(() => _timelineSortByTime = !_timelineSortByTime),
                   icon: Icon(_timelineSortByTime ? Icons.schedule : Icons.bar_chart, size: 18),
                   label: Text(_timelineSortByTime ? "By time" : "By total"),
+                ),
+                if (viewingToday)
+                  TextButton.icon(
+                    onPressed: canScrollH ? _timelineCenterOnNow : null,
+                    icon: const Icon(Icons.my_location, size: 18),
+                    label: const Text("Now"),
+                  ),
+                Tooltip(
+                  message: "Zoom out",
+                  child: IconButton(
+                    onPressed: _timelineZoom <= 1.01 ? null : _timelineZoomOut,
+                    icon: const Icon(Icons.zoom_out, size: 20),
+                  ),
+                ),
+                OutlinedButton(
+                  onPressed: (_timelineZoom - 1.0).abs() < 0.01 ? null : _timelineResetView,
+                  child: Text("x${_timelineZoom.toStringAsFixed(1)}"),
+                ),
+                Tooltip(
+                  message: "Zoom in",
+                  child: IconButton(
+                    onPressed: _timelineZoom >= 3.99 ? null : _timelineZoomIn,
+                    icon: const Icon(Icons.zoom_in, size: 20),
+                  ),
                 ),
                 if (hasMore)
                   TextButton.icon(
@@ -2076,6 +2209,8 @@ class TodayScreenState extends State<TodayScreen> {
             DayTimeline(
               lanes: lanes,
               showNowIndicator: _viewingToday(),
+              zoom: _timelineZoom,
+              horizontalController: _timelineH,
               onLaneTap: (lane) {
                 final subtitle = (lane.subtitle ?? "").trim();
                 final preferWorkspace = lane.kind == "app" && subtitle.toLowerCase().startsWith("workspace:");
@@ -2103,7 +2238,9 @@ class TodayScreenState extends State<TodayScreen> {
                   const SizedBox(width: RecorderTokens.space1),
                       Expanded(
                         child: Text(
-                          "Tip: tap a bar to open its block. Tap a lane to filter Review.",
+                          canScrollH
+                              ? "Tip: tap a bar to open its block. Zoom/pan doesn't reset when you close the sheet."
+                              : "Tip: tap a bar to open its block. Tap a lane to filter Review.",
                           style: Theme.of(context).textTheme.labelMedium,
                         ),
                       ),

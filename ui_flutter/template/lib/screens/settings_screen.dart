@@ -6,6 +6,7 @@ import "../api/core_client.dart";
 import "../theme/tokens.dart";
 import "../utils/desktop_agent.dart";
 import "../utils/format.dart";
+import "../utils/startup.dart";
 
 enum _PrivacyLevel { l1, l2, l3 }
 
@@ -64,6 +65,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _agentBusy = false;
   String? _agentRepoRoot;
 
+  bool _startupBusy = false;
+  bool? _startupEnabled;
+  String? _startupError;
+
   @override
   void initState() {
     super.initState();
@@ -73,6 +78,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ruleQuery = TextEditingController();
     _refreshAll();
     _loadAgentInfo();
+    _loadStartup();
   }
 
   Future<void> _loadAgentInfo() async {
@@ -148,6 +154,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _refreshAll();
     } finally {
       if (mounted) setState(() => _agentBusy = false);
+    }
+  }
+
+  Future<void> _loadStartup() async {
+    final startup = StartupController.instance;
+    if (!startup.isAvailable) return;
+    try {
+      final enabled = await startup.isEnabled();
+      if (!mounted) return;
+      setState(() {
+        _startupEnabled = enabled;
+        _startupError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _startupError = e.toString());
+    }
+  }
+
+  Future<void> _setStartupEnabled(bool enabled) async {
+    final startup = StartupController.instance;
+    if (!startup.isAvailable) return;
+    setState(() {
+      _startupBusy = true;
+      _startupError = null;
+    });
+    try {
+      await startup.setEnabled(enabled, startHidden: true);
+      await _loadStartup();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _startupError = e.toString());
+      rethrow;
+    } finally {
+      if (mounted) setState(() => _startupBusy = false);
     }
   }
 
@@ -861,6 +902,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 "Tip: enable Privacy L2 (Store titles) to see YouTube video titles / VS Code workspace names.",
                                 style: Theme.of(context).textTheme.labelMedium,
                               ),
+                              if (StartupController.instance.isAvailable) ...[
+                                const SizedBox(height: RecorderTokens.space2),
+                                const Divider(height: 16),
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Icon(
+                                    Icons.power_settings_new,
+                                    size: 18,
+                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  ),
+                                  title: const Text("Start with Windows"),
+                                  subtitle: Text(
+                                    _startupError != null
+                                        ? "Error: $_startupError"
+                                        : _startupEnabled == null
+                                            ? "Checking…"
+                                            : "Launches RecorderPhone on login (minimized to tray).",
+                                  ),
+                                  trailing: _startupBusy
+                                      ? const SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        )
+                                      : Switch(
+                                          value: _startupEnabled == true,
+                                          onChanged: _startupEnabled == null
+                                              ? null
+                                              : (v) {
+                                                  _setStartupEnabled(v).catchError((e) {
+                                                    final msg = e.toString();
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      SnackBar(content: Text("Startup update failed: $msg")),
+                                                    );
+                                                  });
+                                                },
+                                        ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 2, top: 2),
+                                  child: Text(
+                                    "Close window → keeps running in tray. Use tray menu → Exit to quit.",
+                                    style: Theme.of(context).textTheme.labelMedium,
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -942,16 +1029,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   return v == "chrome" || v == "msedge" || v == "edge" || v == "brave" || v == "vivaldi" || v == "opera" || v == "firefox";
                 }
 
+                final focusTtlSeconds = snap?.focusTtlSeconds ?? (3 * 60);
+                final focusTtl = Duration(seconds: focusTtlSeconds.clamp(30, 3600));
+                final focusFreshMinutes = (focusTtl.inSeconds / 60).ceil().clamp(1, 120);
+
                 final lastAppTs = lastApp == null ? null : _parseLocalTs(lastApp.ts);
                 final lastAppAge = lastAppTs == null ? null : DateTime.now().difference(lastAppTs);
                 final lastAppLabel = displayEntity(lastApp?.entity);
                 final appLooksLikeBrowser = lastApp != null && isBrowserLabel(lastAppLabel);
-                final appIsFresh = lastAppAge != null && lastAppAge.inMinutes < 3;
+                final appIsFresh = lastAppAge != null && lastAppAge <= focusTtl;
                 final browserLooksActive = appLooksLikeBrowser && appIsFresh;
 
                 final lastTabTs = lastTabFocus == null ? null : _parseLocalTs(lastTabFocus.ts);
                 final lastTabAge = lastTabTs == null ? null : DateTime.now().difference(lastTabTs);
-                final tabLooksStale = lastTabAge == null || lastTabAge.inMinutes >= 6;
+                final tabLooksStale = lastTabAge == null || lastTabAge > (focusTtl + const Duration(seconds: 60));
 
                 bool hasAnyTabEvent = lastTabFocus != null || lastTabAudio != null;
                 String anyTabTitle() {
@@ -1115,6 +1206,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 return Column(
                   children: [
                     titleGuide(),
+                    if (snap != null && snap.latestEventAgeSeconds != null)
+                      Padding(
+                        padding: const EdgeInsets.all(RecorderTokens.space2),
+                        child: Row(
+                          children: [
+                            Icon(Icons.schedule, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                            const SizedBox(width: RecorderTokens.space1),
+                            Expanded(
+                              child: Text(
+                                "Latest event: ${snap.latestEventAgeSeconds}s ago · focus TTL ${focusTtl.inMinutes}m · audio TTL ${snap.audioTtlSeconds}s",
+                                style: Theme.of(context).textTheme.labelMedium,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     if (_nowError != null && snap == null)
                       Padding(
                         padding: const EdgeInsets.all(RecorderTokens.space2),
@@ -1142,7 +1249,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             const SizedBox(width: RecorderTokens.space1),
                             const Expanded(
                               child: Text(
-                                "Browser looks active, but tab tracking is stale.\nOpen the extension popup → check Enable tracking + Server URL, then click “Force send” (reload extension only if needed).",
+                                "Browser looks active, but tab tracking is stale.\nOpen the extension popup → check Enable tracking + Server URL, then click “Force send”. If it keeps happening, enable “Keep alive (stability)”.",
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -1160,6 +1267,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       staleHint: browserLooksActive
                           ? "If you’re using the browser right now, this should be fresh. Open the extension popup → Force send."
                           : "This can be normal if you're not using the browser. Switch a tab to trigger a fresh event.",
+                      freshnessMinutes: focusFreshMinutes,
                     ),
                     const Divider(height: 1),
                     tile(
@@ -1170,6 +1278,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ? "No title field. Enable “Send tab title” in the extension, then click “Force send”."
                           : "Titles are OFF (L1). Turn on “Store window/tab titles (L2)” below to see tab titles.",
                       staleHint: "This only reports when the browser is not focused but an audible tab is playing.",
+                      freshnessMinutes: 2,
                     ),
                     const Divider(height: 1),
                     tile(
@@ -1180,6 +1289,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ? "No title field. Start windows_collector with --send-title."
                           : "Titles are OFF (L1). Turn on “Store window/tab titles (L2)” below to see window titles/workspaces.",
                       staleHint: "If windows_collector isn't running, this will go stale. Restart it to resume events.",
+                      freshnessMinutes: focusFreshMinutes,
                     ),
                     const Divider(height: 1),
                     tile(
@@ -1187,6 +1297,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       e: lastAppAudio ?? lastAppAudioStop,
                       emptyHint: "No app_audio yet. Start windows_collector.exe (default track-audio ON) and play music in a desktop app (e.g. QQ Music).",
                       staleHint: "This only reports when a non-browser app is producing audio. If you're only using browser audio, check the extension's background-audio tile instead.",
+                      freshnessMinutes: 2,
                     ),
                     const Divider(height: 1),
                     tile(

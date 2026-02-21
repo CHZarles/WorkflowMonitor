@@ -13,6 +13,7 @@
  *
  * What it does:
  * - rsync `ui_flutter/template/lib/` -> `<dest>/recorderphone_ui/lib/` (with --delete)
+ * - rsync `ui_flutter/template/assets/` -> `<dest>/recorderphone_ui/assets/` (with --delete)
  * - copy `ui_flutter/template/pubspec.yaml` -> `<dest>/recorderphone_ui/pubspec.yaml`
  *
  * Notes:
@@ -35,11 +36,13 @@ if (!destRoot) {
 
 const SRC_ROOT = process.cwd();
 const SRC_LIB = path.join(SRC_ROOT, "ui_flutter", "template", "lib");
+const SRC_ASSETS = path.join(SRC_ROOT, "ui_flutter", "template", "assets");
 const SRC_PUBSPEC = path.join(SRC_ROOT, "ui_flutter", "template", "pubspec.yaml");
 
 const DEST_REPO = path.resolve(destRoot);
 const DEST_UI = path.join(DEST_REPO, "recorderphone_ui");
 const DEST_LIB = path.join(DEST_UI, "lib");
+const DEST_ASSETS = path.join(DEST_UI, "assets");
 const DEST_PUBSPEC = path.join(DEST_UI, "pubspec.yaml");
 
 function assertExists(p, hint) {
@@ -54,6 +57,7 @@ function assertExists(p, hint) {
 }
 
 assertExists(SRC_LIB, "Run this from the RecorderPhone repo root (where ui_flutter/template exists).");
+assertExists(SRC_ASSETS, "Missing ui_flutter/template/assets.");
 assertExists(SRC_PUBSPEC, "Missing ui_flutter/template/pubspec.yaml.");
 assertExists(
   DEST_UI,
@@ -62,11 +66,12 @@ assertExists(
 
 async function ensureDest() {
   await fs.promises.mkdir(DEST_LIB, { recursive: true });
+  await fs.promises.mkdir(DEST_ASSETS, { recursive: true });
 }
 
-function runRsync() {
+function runRsync(from, to) {
   return new Promise((resolve, reject) => {
-    const rsyncArgs = ["-a", "--delete", "--mkpath", `${SRC_LIB}/`, `${DEST_LIB}/`];
+    const rsyncArgs = ["-a", "--delete", "--mkpath", `${from}/`, `${to}/`];
     const p = spawn("rsync", rsyncArgs, { stdio: "inherit" });
     p.on("error", reject);
     p.on("exit", (code) => {
@@ -100,7 +105,8 @@ async function overlayOnce(reason) {
   console.log(`\n[overlay-ui] ${new Date().toLocaleTimeString()}  reason=${reason}`);
   try {
     await ensureDest();
-    await runRsync();
+    await runRsync(SRC_LIB, DEST_LIB);
+    await runRsync(SRC_ASSETS, DEST_ASSETS);
     await copyPubspec();
     // eslint-disable-next-line no-console
     console.log("[overlay-ui] done");
@@ -182,6 +188,8 @@ function watchDir(dirPath) {
 async function installWatchers() {
   const dirs = await listDirsRecursively(SRC_LIB);
   for (const d of dirs) watchDir(d);
+  const assetDirs = await listDirsRecursively(SRC_ASSETS);
+  for (const d of assetDirs) watchDir(d);
   watchDir(path.dirname(SRC_PUBSPEC));
 }
 

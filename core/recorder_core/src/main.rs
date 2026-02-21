@@ -141,22 +141,45 @@ fn default_now_limit() -> usize {
 
 #[derive(Serialize)]
 struct NowSnapshot {
+    server_ts: String,
+    /// When a focus/tab event is older than this, it is considered stale for "Now".
+    focus_ttl_seconds: i64,
+    /// Background audio is considered stale after this (helps avoid over-attribution).
+    audio_ttl_seconds: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     latest_event_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     latest_event: Option<EventRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    latest_event_age_seconds: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     app_active: Option<EventRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    app_active_age_seconds: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tab_focus: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tab_focus_age_seconds: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tab_audio: Option<EventRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tab_audio_stop: Option<EventRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tab_audio_age_seconds: Option<i64>,
+    tab_audio_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     app_audio: Option<EventRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     app_audio_stop: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_audio_age_seconds: Option<i64>,
+    app_audio_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    now_focus_app: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    now_using_tab: Option<EventRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    now_background_audio: Option<EventRecord>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     latest_titles: HashMap<String, String>, // key: "app|<entity>" or "domain|<hostname>"
 }
@@ -175,7 +198,11 @@ struct EventRow {
 fn parse_activity_from_payload(payload_json: &str) -> Option<String> {
     serde_json::from_str::<Value>(payload_json)
         .ok()
-        .and_then(|v| v.get("activity").and_then(|a| a.as_str()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.get("activity")
+                .and_then(|a| a.as_str())
+                .map(|s| s.to_string())
+        })
 }
 
 fn event_record_from_row(row: &EventRow) -> EventRecord {
@@ -207,6 +234,8 @@ fn apply_privacy_to_event(mut e: EventRecord, privacy: &PrivacyIndex) -> Option<
 fn load_now_snapshot(
     conn: &mut Connection,
     privacy: &PrivacyIndex,
+    settings: Settings,
+    now: OffsetDateTime,
     scan_limit: usize,
 ) -> rusqlite::Result<NowSnapshot> {
     let scan_limit = scan_limit.clamp(1, 2000);
@@ -410,15 +439,121 @@ fn load_now_snapshot(
         }
     }
 
+    fn age_seconds(rfc3339: &str, now: OffsetDateTime) -> Option<i64> {
+        let t = OffsetDateTime::parse(rfc3339, &Rfc3339).ok()?;
+        let diff = now - t;
+        Some(diff.whole_seconds().max(0))
+    }
+
+    fn parse_ts(rfc3339: &str) -> Option<OffsetDateTime> {
+        OffsetDateTime::parse(rfc3339, &Rfc3339).ok()
+    }
+
+    let focus_ttl_seconds = settings.idle_cutoff_seconds.max(10);
+    let audio_ttl_seconds = AUDIO_IDLE_CUTOFF_SECONDS.max(10);
+
+    let latest_event_age_seconds = latest_event.as_ref().and_then(|e| age_seconds(&e.ts, now));
+    let app_active_age_seconds = app_active.as_ref().and_then(|e| age_seconds(&e.ts, now));
+    let tab_focus_age_seconds = tab_focus.as_ref().and_then(|e| age_seconds(&e.ts, now));
+    let tab_audio_age_seconds = tab_audio.as_ref().and_then(|e| age_seconds(&e.ts, now));
+    let app_audio_age_seconds = app_audio.as_ref().and_then(|e| age_seconds(&e.ts, now));
+
+    let mut tab_audio_active = false;
+    if let Some(a) = tab_audio.as_ref() {
+        tab_audio_active = true;
+        if let Some(age) = tab_audio_age_seconds {
+            if age > audio_ttl_seconds {
+                tab_audio_active = false;
+            }
+        }
+        if tab_audio_active {
+            if let (Some(stop), Some(a_ts)) = (tab_audio_stop.as_ref(), parse_ts(&a.ts)) {
+                if let Some(s_ts) = parse_ts(&stop.ts) {
+                    if s_ts >= a_ts {
+                        tab_audio_active = false;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut app_audio_active = false;
+    if let Some(a) = app_audio.as_ref() {
+        app_audio_active = true;
+        if let Some(age) = app_audio_age_seconds {
+            if age > audio_ttl_seconds {
+                app_audio_active = false;
+            }
+        }
+        if app_audio_active {
+            if let (Some(stop), Some(a_ts)) = (app_audio_stop.as_ref(), parse_ts(&a.ts)) {
+                if let Some(s_ts) = parse_ts(&stop.ts) {
+                    if s_ts >= a_ts {
+                        app_audio_active = false;
+                    }
+                }
+            }
+        }
+    }
+
+    let app_fresh = app_active_age_seconds
+        .map(|age| age <= focus_ttl_seconds)
+        .unwrap_or(false);
+    let tab_fresh = tab_focus_age_seconds
+        .map(|age| age <= focus_ttl_seconds)
+        .unwrap_or(false);
+
+    let now_focus_app = if app_fresh { app_active.clone() } else { None };
+
+    let browser_focused = now_focus_app
+        .as_ref()
+        .and_then(|e| e.entity.as_deref())
+        .map(is_browser_app)
+        .unwrap_or(false)
+        || (now_focus_app.is_none() && tab_fresh);
+
+    let now_using_tab = if browser_focused {
+        if tab_fresh {
+            tab_focus.clone()
+        } else {
+            None
+        }
+    } else if tab_audio_active {
+        tab_audio.clone()
+    } else {
+        None
+    };
+
+    let now_background_audio = if app_audio_active {
+        app_audio.clone()
+    } else {
+        None
+    };
+
+    let server_ts = now.format(&Rfc3339).unwrap_or_default();
+
     Ok(NowSnapshot {
+        server_ts,
+        focus_ttl_seconds,
+        audio_ttl_seconds,
         latest_event_id,
         latest_event,
+        latest_event_age_seconds,
         app_active,
+        app_active_age_seconds,
         tab_focus,
+        tab_focus_age_seconds,
         tab_audio,
         tab_audio_stop,
+        tab_audio_age_seconds,
+        tab_audio_active,
         app_audio,
         app_audio_stop,
+        app_audio_age_seconds,
+        app_audio_active,
+        now_focus_app,
+        now_using_tab,
+        now_background_audio,
         latest_titles,
     })
 }
@@ -593,8 +728,7 @@ impl PrivacyIndex {
         let rules = list_privacy_rules(conn)?;
         let mut idx = PrivacyIndex::default();
         for r in rules {
-            idx.action_by_kind_value
-                .insert((r.kind, r.value), r.action);
+            idx.action_by_kind_value.insert((r.kind, r.value), r.action);
         }
         Ok(idx)
     }
@@ -674,8 +808,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/events", get(get_events))
         .route("/now", get(get_now))
         .route("/tracking/status", get(get_tracking_status))
-        .route("/tracking/pause", post(post_tracking_pause).options(options_ok))
-        .route("/tracking/resume", post(post_tracking_resume).options(options_ok))
+        .route(
+            "/tracking/pause",
+            post(post_tracking_pause).options(options_ok),
+        )
+        .route(
+            "/tracking/resume",
+            post(post_tracking_resume).options(options_ok),
+        )
         .route(
             "/settings",
             get(get_settings).post(post_settings).options(options_ok),
@@ -683,8 +823,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/timeline/day", get(get_timeline_day))
         .route("/blocks/today", get(get_blocks_today))
         .route("/blocks/due", get(get_blocks_due))
-        .route("/blocks/review", post(post_block_review).options(options_ok))
-        .route("/blocks/delete", post(post_block_delete).options(options_ok))
+        .route(
+            "/blocks/review",
+            post(post_block_review).options(options_ok),
+        )
+        .route(
+            "/blocks/delete",
+            post(post_block_delete).options(options_ok),
+        )
         .route(
             "/privacy/rules",
             get(get_privacy_rules)
@@ -879,7 +1025,11 @@ async fn post_event(State(state): State<AppState>, Json(payload): Json<Value>) -
 
     match tracking_is_paused(&mut conn, OffsetDateTime::now_utc()) {
         Ok(true) => {
-            return Json(OkResponse::<Value> { ok: true, data: None }).into_response();
+            return Json(OkResponse::<Value> {
+                ok: true,
+                data: None,
+            })
+            .into_response();
         }
         Ok(false) => {}
         Err(err) => {
@@ -897,7 +1047,11 @@ async fn post_event(State(state): State<AppState>, Json(payload): Json<Value>) -
     } {
         match action.as_str() {
             "drop" => {
-                return Json(OkResponse::<Value> { ok: true, data: None }).into_response();
+                return Json(OkResponse::<Value> {
+                    ok: true,
+                    data: None,
+                })
+                .into_response();
             }
             "mask" => {
                 entity = Some("__hidden__".to_string());
@@ -907,7 +1061,10 @@ async fn post_event(State(state): State<AppState>, Json(payload): Json<Value>) -
                     // Mask all supported entity fields, not just specific event types.
                     // (e.g. tab_audio_stop/app_audio must not leak their domain/app in payload_json.)
                     if obj.contains_key("domain") {
-                        obj.insert("domain".to_string(), Value::String("__hidden__".to_string()));
+                        obj.insert(
+                            "domain".to_string(),
+                            Value::String("__hidden__".to_string()),
+                        );
                         obj.remove("title");
                     }
                     if obj.contains_key("app") {
@@ -969,7 +1126,11 @@ async fn post_event(State(state): State<AppState>, Json(payload): Json<Value>) -
             .into_response();
     }
 
-    Json(OkResponse::<Value> { ok: true, data: None }).into_response()
+    Json(OkResponse::<Value> {
+        ok: true,
+        data: None,
+    })
+    .into_response()
 }
 
 async fn get_events(State(state): State<AppState>, Query(q): Query<EventsQuery>) -> Response {
@@ -997,10 +1158,12 @@ async fn get_events(State(state): State<AppState>, Query(q): Query<EventsQuery>)
 }
 
 async fn get_now(State(state): State<AppState>, Query(q): Query<NowQuery>) -> Response {
+    let now = OffsetDateTime::now_utc();
+    let settings = { *state.settings.lock().await };
     let mut conn = state.conn.lock().await;
     let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
 
-    let snap = match load_now_snapshot(&mut conn, &privacy, q.limit) {
+    let snap = match load_now_snapshot(&mut conn, &privacy, settings, now, q.limit) {
         Ok(v) => v,
         Err(err) => {
             error!("load_now_snapshot failed: {err}");
@@ -1086,9 +1249,7 @@ async fn post_tracking_pause(
     };
 
     let mut conn = state.conn.lock().await;
-    if let Err(err) =
-        set_tracking_pause(&mut conn, paused_until_ts.as_deref(), &updated_at)
-    {
+    if let Err(err) = set_tracking_pause(&mut conn, paused_until_ts.as_deref(), &updated_at) {
         error!("set_tracking_pause failed: {err}");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1206,7 +1367,9 @@ async fn post_settings(State(state): State<AppState>, Json(req): Json<SettingsUp
         settings.store_exe_path = v;
     }
 
-    let updated_at = OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default();
+    let updated_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
     {
         let mut conn = state.conn.lock().await;
         if let Err(err) = upsert_app_settings(&mut conn, settings, &updated_at) {
@@ -1314,7 +1477,11 @@ fn block_is_reviewed(r: &BlockReview) -> bool {
     !r.tags.is_empty()
 }
 
-fn find_due_block(blocks: &[BlockSummary], block_seconds: i64, now: OffsetDateTime) -> Option<BlockSummary> {
+fn find_due_block(
+    blocks: &[BlockSummary],
+    block_seconds: i64,
+    now: OffsetDateTime,
+) -> Option<BlockSummary> {
     if blocks.is_empty() {
         return None;
     }
@@ -1411,7 +1578,11 @@ async fn get_blocks_due(State(state): State<AppState>, Query(q): Query<BlocksQue
 
     let due = find_due_block(&blocks_with_reviews, settings.block_seconds.max(60), now);
 
-    Json(OkResponse { ok: true, data: due }).into_response()
+    Json(OkResponse {
+        ok: true,
+        data: due,
+    })
+    .into_response()
 }
 
 async fn get_timeline_day(State(state): State<AppState>, Query(q): Query<BlocksQuery>) -> Response {
@@ -1461,7 +1632,8 @@ async fn get_timeline_day(State(state): State<AppState>, Query(q): Query<BlocksQ
     };
 
     let settings = { *state.settings.lock().await };
-    let segments = build_timeline_segments(&events, settings, OffsetDateTime::now_utc().min(day_end));
+    let segments =
+        build_timeline_segments(&events, settings, OffsetDateTime::now_utc().min(day_end));
 
     Json(OkResponse {
         ok: true,
@@ -1482,7 +1654,9 @@ async fn post_block_review(State(state): State<AppState>, Json(r): Json<ReviewUp
             .into_response();
     }
 
-    let updated_at = OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_else(|_| r.block_id.clone());
+    let updated_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| r.block_id.clone());
     let tags_json = serde_json::to_string(&r.tags).unwrap_or_else(|_| "[]".to_string());
     let skip_reason = if r.skipped {
         r.skip_reason
@@ -1495,7 +1669,13 @@ async fn post_block_review(State(state): State<AppState>, Json(r): Json<ReviewUp
     };
 
     let mut conn = state.conn.lock().await;
-    if let Err(err) = upsert_review(&mut conn, &r, skip_reason.as_deref(), &tags_json, &updated_at) {
+    if let Err(err) = upsert_review(
+        &mut conn,
+        &r,
+        skip_reason.as_deref(),
+        &tags_json,
+        &updated_at,
+    ) {
         error!("upsert_review failed: {err}");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1507,7 +1687,11 @@ async fn post_block_review(State(state): State<AppState>, Json(r): Json<ReviewUp
             .into_response();
     }
 
-    Json(OkResponse::<Value> { ok: true, data: None }).into_response()
+    Json(OkResponse::<Value> {
+        ok: true,
+        data: None,
+    })
+    .into_response()
 }
 
 async fn post_block_delete(
@@ -1650,7 +1834,10 @@ async fn get_privacy_rules(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn post_privacy_rule(State(state): State<AppState>, Json(r): Json<PrivacyRuleUpsert>) -> Response {
+async fn post_privacy_rule(
+    State(state): State<AppState>,
+    Json(r): Json<PrivacyRuleUpsert>,
+) -> Response {
     let kind = r.kind.trim().to_lowercase();
     let action = r.action.trim().to_lowercase();
     let mut value = r.value.trim().to_string();
@@ -1707,7 +1894,9 @@ async fn post_privacy_rule(State(state): State<AppState>, Json(r): Json<PrivacyR
         }
     }
 
-    let created_at = OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default();
+    let created_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
 
     let mut conn = state.conn.lock().await;
     match upsert_privacy_rule(&mut conn, &kind, &value, &action, &created_at) {
@@ -1741,7 +1930,11 @@ async fn delete_privacy_rule(State(state): State<AppState>, Path(id): Path<i64>)
             }),
         )
             .into_response(),
-        Ok(_) => Json(OkResponse::<Value> { ok: true, data: None }).into_response(),
+        Ok(_) => Json(OkResponse::<Value> {
+            ok: true,
+            data: None,
+        })
+        .into_response(),
         Err(err) => {
             error!("delete_privacy_rule_by_id failed: {err}");
             (
@@ -2068,10 +2261,10 @@ INSERT INTO tracking_state (id, paused, paused_until_ts, updated_at)
 VALUES (1, 0, NULL, '1970-01-01T00:00:00Z')
 ON CONFLICT(id) DO NOTHING;
 "#,
-	    )?;
-	    ensure_app_settings_columns(conn)?;
-	    ensure_block_reviews_columns(conn)?;
-	    Ok(())
+    )?;
+    ensure_app_settings_columns(conn)?;
+    ensure_block_reviews_columns(conn)?;
+    Ok(())
 }
 
 fn ensure_app_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
@@ -2128,7 +2321,9 @@ fn load_or_init_settings(conn: &mut Connection, defaults: Settings) -> rusqlite:
             store_exe_path: settings.store_exe_path,
         };
         if fixed != settings {
-            let updated_at = OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default();
+            let updated_at = OffsetDateTime::now_utc()
+                .format(&Rfc3339)
+                .unwrap_or_default();
             upsert_app_settings(conn, fixed, &updated_at)?;
         }
         return Ok(fixed);
@@ -2140,7 +2335,9 @@ fn load_or_init_settings(conn: &mut Connection, defaults: Settings) -> rusqlite:
         store_titles: defaults.store_titles,
         store_exe_path: defaults.store_exe_path,
     };
-    let updated_at = OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default();
+    let updated_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
     upsert_app_settings(conn, fixed, &updated_at)?;
     Ok(fixed)
 }
@@ -2273,8 +2470,8 @@ fn privacy_action_for_event(
     e: &IngestEvent,
 ) -> rusqlite::Result<Option<String>> {
     let check = |kind: &str, value: &str| -> rusqlite::Result<Option<String>> {
-        let mut stmt =
-            conn.prepare("SELECT action FROM privacy_rules WHERE kind = ?1 AND value = ?2 LIMIT 1")?;
+        let mut stmt = conn
+            .prepare("SELECT action FROM privacy_rules WHERE kind = ?1 AND value = ?2 LIMIT 1")?;
         let mut rows = stmt.query((kind, value))?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
@@ -2335,9 +2532,8 @@ fn privacy_action_for_event(
 }
 
 fn load_tracking_status(conn: &mut Connection) -> rusqlite::Result<TrackingStatus> {
-    let mut stmt = conn.prepare(
-        "SELECT paused, paused_until_ts, updated_at FROM tracking_state WHERE id = 1",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT paused, paused_until_ts, updated_at FROM tracking_state WHERE id = 1")?;
     stmt.query_row([], |row| {
         let paused: i64 = row.get(0)?;
         Ok(TrackingStatus {
@@ -2412,7 +2608,11 @@ fn list_events(
         let payload_json: String = row.get(6)?;
         let activity = serde_json::from_str::<Value>(&payload_json)
             .ok()
-            .and_then(|v| v.get("activity").and_then(|a| a.as_str()).map(|s| s.to_string()));
+            .and_then(|v| {
+                v.get("activity")
+                    .and_then(|a| a.as_str())
+                    .map(|s| s.to_string())
+            });
         Ok(EventRecord {
             id: row.get(0)?,
             ts: row.get(1)?,
@@ -2469,12 +2669,21 @@ fn list_events_between(
     )?;
     let rows = stmt.query_map((start_s, end_s), |row| {
         let ts_s: String = row.get(0)?;
-        let ts = OffsetDateTime::parse(&ts_s, &Rfc3339)
-            .map_err(|_| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::fmt::Error)))?;
+        let ts = OffsetDateTime::parse(&ts_s, &Rfc3339).map_err(|_| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(std::fmt::Error),
+            )
+        })?;
         let payload_json: String = row.get(5)?;
         let activity = serde_json::from_str::<Value>(&payload_json)
             .ok()
-            .and_then(|v| v.get("activity").and_then(|a| a.as_str()).map(|s| s.to_string()));
+            .and_then(|v| {
+                v.get("activity")
+                    .and_then(|a| a.as_str())
+                    .map(|s| s.to_string())
+            });
         Ok(EventForBlocks {
             ts,
             source: row.get(1)?,
@@ -2507,8 +2716,7 @@ fn normalize_tz_offset_minutes(v: Option<i32>) -> i32 {
 }
 
 fn tz_offset_from_minutes(minutes: i32) -> time::UtcOffset {
-    time::UtcOffset::from_whole_seconds(minutes.saturating_mul(60))
-        .unwrap_or(time::UtcOffset::UTC)
+    time::UtcOffset::from_whole_seconds(minutes.saturating_mul(60)).unwrap_or(time::UtcOffset::UTC)
 }
 
 fn parse_day_start_utc_for_offset(
@@ -2533,11 +2741,7 @@ fn parse_day_start_utc_for_offset(
 }
 
 fn is_browser_app(app: &str) -> bool {
-    let name = app
-        .rsplit(['\\', '/'])
-        .next()
-        .unwrap_or(app)
-        .to_lowercase();
+    let name = app.rsplit(['\\', '/']).next().unwrap_or(app).to_lowercase();
     matches!(
         name.as_str(),
         "chrome.exe" | "msedge.exe" | "brave.exe" | "vivaldi.exe" | "opera.exe" | "firefox.exe"
@@ -2578,7 +2782,11 @@ fn normalize_web_title(domain: &str, raw: &str) -> String {
     t.trim().to_string()
 }
 
-fn normalized_title_for_domain(domain: &str, raw: Option<&str>, store_titles: bool) -> Option<String> {
+fn normalized_title_for_domain(
+    domain: &str,
+    raw: Option<&str>,
+    store_titles: bool,
+) -> Option<String> {
     if !store_titles {
         return None;
     }
@@ -2587,10 +2795,18 @@ fn normalized_title_for_domain(domain: &str, raw: Option<&str>, store_titles: bo
         return None;
     }
     let t = normalize_web_title(domain, r);
-    if t.is_empty() { None } else { Some(t) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
 }
 
-fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTime) -> Vec<BlockSummary> {
+fn build_blocks(
+    events: &[EventForBlocks],
+    settings: Settings,
+    now: OffsetDateTime,
+) -> Vec<BlockSummary> {
     if events.is_empty() {
         return Vec::new();
     }
@@ -2739,7 +2955,12 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
             seg -= take;
 
             if time::Duration::seconds(active_seconds) >= block_len {
-                blocks.push(finalize_block(current_start, current_end, &bucket, active_seconds));
+                blocks.push(finalize_block(
+                    current_start,
+                    current_end,
+                    &bucket,
+                    active_seconds,
+                ));
                 // next block starts exactly at the boundary
                 current_start = current_end;
                 bucket.clear();
@@ -2750,7 +2971,12 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
         // If there was a long gap, close the current block (do not attribute idle to any entity).
         if raw_gap > idle_cutoff {
             if active_seconds > 0 {
-                blocks.push(finalize_block(current_start, current_end, &bucket, active_seconds));
+                blocks.push(finalize_block(
+                    current_start,
+                    current_end,
+                    &bucket,
+                    active_seconds,
+                ));
             }
             // Start a new block at next_ts (there may be idle gap).
             current_start = next_ts;
@@ -2765,13 +2991,24 @@ fn build_blocks(events: &[EventForBlocks], settings: Settings, now: OffsetDateTi
     }
 
     if active_seconds > 0 {
-        blocks.push(finalize_block(current_start, current_end, &bucket, active_seconds));
+        blocks.push(finalize_block(
+            current_start,
+            current_end,
+            &bucket,
+            active_seconds,
+        ));
     }
 
     if !audio_events.is_empty() && !blocks.is_empty() {
         // Audio events are heartbeated by the extension (default 60s). Use a tighter cutoff than the
         // primary focus idle cutoff to avoid over-attributing when audio stops but no "stop" event is sent.
-        attach_background_audio(&mut blocks, &audio_events, settings.store_titles, audio_idle_cutoff, now);
+        attach_background_audio(
+            &mut blocks,
+            &audio_events,
+            settings.store_titles,
+            audio_idle_cutoff,
+            now,
+        );
     }
 
     blocks
@@ -2929,39 +3166,39 @@ fn build_timeline_segments(
         }
     }
 
-	    // Background audio stream segments (audible tab while browser not focused).
-	    let mut audio_out: Vec<SegmentAcc> = Vec::new();
-	    if !audio_events.is_empty() {
-	        for i in 0..audio_events.len() {
-	            let cur = &audio_events[i];
-	            let kind = match cur.event.as_str() {
-	                "tab_active" => EntityKind::Domain,
-	                "app_audio" => EntityKind::App,
-	                _ => continue,
-	            };
-	            let next_ts = audio_events.get(i + 1).map(|e| e.ts).unwrap_or(now);
-	            if next_ts <= cur.ts {
-	                continue;
-	            }
+    // Background audio stream segments (audible tab while browser not focused).
+    let mut audio_out: Vec<SegmentAcc> = Vec::new();
+    if !audio_events.is_empty() {
+        for i in 0..audio_events.len() {
+            let cur = &audio_events[i];
+            let kind = match cur.event.as_str() {
+                "tab_active" => EntityKind::Domain,
+                "app_audio" => EntityKind::App,
+                _ => continue,
+            };
+            let next_ts = audio_events.get(i + 1).map(|e| e.ts).unwrap_or(now);
+            if next_ts <= cur.ts {
+                continue;
+            }
             let raw_gap = next_ts - cur.ts;
             let seg = raw_gap.min(audio_idle_cutoff);
             if seg.is_negative() || seg.is_zero() {
                 continue;
             }
-	            let seg_end = cur.ts + seg;
-	            push_or_merge_segment(
-	                &mut audio_out,
-	                SegmentAcc {
-	                    kind,
-	                    entity: cur.entity.clone(),
-	                    title: cur.title.clone(),
-	                    activity: "audio",
-	                    start: cur.ts,
-	                    end: seg_end,
-	                },
-	            );
-	        }
-	    }
+            let seg_end = cur.ts + seg;
+            push_or_merge_segment(
+                &mut audio_out,
+                SegmentAcc {
+                    kind,
+                    entity: cur.entity.clone(),
+                    title: cur.title.clone(),
+                    activity: "audio",
+                    start: cur.ts,
+                    end: seg_end,
+                },
+            );
+        }
+    }
 
     let mut all = Vec::new();
     all.extend(focus_out);
@@ -3078,7 +3315,11 @@ fn attach_background_audio(
             .map(|(k, sec)| TopItem {
                 kind: k.kind.as_str().to_string(),
                 entity: k.entity.clone(),
-                title: if k.kind == EntityKind::Domain { k.title.clone() } else { None },
+                title: if k.kind == EntityKind::Domain {
+                    k.title.clone()
+                } else {
+                    None
+                },
                 seconds: *sec,
             })
             .collect();
@@ -3104,7 +3345,11 @@ fn finalize_block(
         .map(|(k, v)| TopItem {
             kind: k.kind.as_str().to_string(),
             entity: k.entity.clone(),
-            title: if k.kind == EntityKind::Domain { k.title.clone() } else { None },
+            title: if k.kind == EntityKind::Domain {
+                k.title.clone()
+            } else {
+                None
+            },
             seconds: *v,
         })
         .collect();
@@ -3157,7 +3402,10 @@ ON CONFLICT(block_id) DO UPDATE SET
     Ok(())
 }
 
-fn attach_reviews(conn: &mut Connection, mut blocks: Vec<BlockSummary>) -> rusqlite::Result<Vec<BlockSummary>> {
+fn attach_reviews(
+    conn: &mut Connection,
+    mut blocks: Vec<BlockSummary>,
+) -> rusqlite::Result<Vec<BlockSummary>> {
     for b in &mut blocks {
         if let Some(r) = get_review(conn, &b.id)? {
             b.review = Some(r);
@@ -3444,12 +3692,12 @@ mod tests {
             },
         ];
 
-	        let settings = Settings {
-	            block_seconds: 45 * 60,
-	            idle_cutoff_seconds: 10 * 60,
-	            store_titles: false,
-	            store_exe_path: false,
-	        };
+        let settings = Settings {
+            block_seconds: 45 * 60,
+            idle_cutoff_seconds: 10 * 60,
+            store_titles: false,
+            store_exe_path: false,
+        };
         let blocks = build_blocks(&events, settings, m(5));
         assert_eq!(blocks.len(), 1);
         let b = &blocks[0];
@@ -3463,7 +3711,10 @@ mod tests {
                 .unwrap_or(0)
         };
         assert_eq!(sec("github.com"), 3 * 60);
-        assert_eq!(sec("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"), 60);
+        assert_eq!(
+            sec("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"),
+            60
+        );
         assert_eq!(sec("C:\\Program Files\\Microsoft VS Code\\Code.exe"), 60);
     }
 

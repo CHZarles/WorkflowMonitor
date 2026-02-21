@@ -41,6 +41,10 @@ powershell -ExecutionPolicy Bypass -File .\dev\package-windows.ps1 -InstallProto
 ```
 然后双击运行：`dist\windows\RecorderPhone\RecorderPhone.exe`。
 
+说明：
+- 打包脚本会 best-effort 停掉正在运行的 RecorderPhone/Core/Collector，并清理 `dist\windows\RecorderPhone` 后再拷贝，便于反复覆盖升级。
+- 如果仍提示文件被占用：先退出托盘（Exit），或执行 `.\dev\stop-agent.ps1 -KillAllByName` 后重试。
+
 ## 方案 C：自动同步到 Windows 路径（“async”/长期推荐）
 如果你想 **在 WSL 编辑**，但让 **Windows 侧构建/运行**（Collector/Flutter Windows）更稳/性能更好，用 rsync 自动镜像：
 ```bash

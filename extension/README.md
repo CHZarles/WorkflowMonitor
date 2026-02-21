@@ -5,6 +5,7 @@
 - 浏览器窗口在前台（focus）时：上报当前活跃 tab（`activity=focus`）
 - 浏览器不在前台但有 audible tab 时：上报“正在播放音频”的 tab（`activity=audio`，可在 popup 里关闭）
 - 可选：上报 tab 标题（默认关闭）
+- 可选：Keep alive（稳定性开关，默认开启，减少 MV3 service worker 休眠导致的“需要 reload 才恢复”）
 - 上报目标（默认）：`http://127.0.0.1:17600/event`
 
 说明：
@@ -30,8 +31,9 @@
 A：多数情况下并不需要 reload。优先按下面顺序排查：
 1) 打开扩展 popup，看 `Last status` 是否在持续更新（是否有 `error` / 连续错误次数）  
 2) 确认 `Server URL` 指向正在运行的 Core（`Test /health` 必须是 OK）  
-3) 点击一次 `Force send`（会立刻尝试发送当前 tab / audible tab）  
-4) 只有当 popup 里持续报错、且 `Force send` 也无效时，再考虑 reload 扩展/重启浏览器
+3) 确认 `Keep alive (stability)` 为 ON（可显著减少 MV3 休眠带来的“断更”）  
+4) 点击一次 `Force send`（会立刻尝试发送当前 tab / audible tab）  
+5) 只有当 popup 里持续报错、且 `Force send` 也无效时，再考虑 reload 扩展/重启浏览器
 
 **Q：我想看 YouTube 视频标题，而不是只看到 youtube.com？**  
 A：需要两步都打开：

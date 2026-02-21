@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   http: ^1.2.2
   shared_preferences: ^2.3.2
+  system_tray: ^2.0.3
+  window_manager: ^0.5.1
 
 dev_dependencies:
   flutter_test:
@@ -19,4 +21,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
+  assets:
+    - assets/tray.ico

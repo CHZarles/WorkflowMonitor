@@ -5,6 +5,7 @@ import "package:shared_preferences/shared_preferences.dart";
 
 import "../api/core_client.dart";
 import "../utils/desktop_agent.dart";
+import "../utils/tray_controller.dart";
 import "search_screen.dart";
 import "settings_screen.dart";
 import "today_screen.dart";
@@ -12,9 +13,10 @@ import "today_screen.dart";
 enum _TrackingAction { resume, pause15, pause60, pauseManual }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, this.initialDeepLink});
+  const AppShell({super.key, this.initialDeepLink, this.startMinimized = false});
 
   final String? initialDeepLink;
+  final bool startMinimized;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -58,6 +60,7 @@ class _AppShellState extends State<AppShell> {
   @override
   void dispose() {
     _trackingTimer?.cancel();
+    TrayController.instance.dispose();
     super.dispose();
   }
 
@@ -71,6 +74,19 @@ class _AppShellState extends State<AppShell> {
     if (!mounted) return;
     setState(() => _ready = true);
 
+    // Windows tray: close-to-tray + quick actions.
+    unawaited(
+      TrayController.instance.ensureInitialized(
+        getServerUrl: () => _serverUrl,
+        onQuickReview: () async {
+          if (!mounted) return;
+          setState(() => _index = 1);
+          _searchKey.currentState?.refresh(silent: true);
+        },
+        startHidden: widget.startMinimized && (widget.initialDeepLink == null || widget.initialDeepLink!.trim().isEmpty),
+      ),
+    );
+
     // Best-effort: if Core is down and we're on Windows, try starting the local agent so the user
     // doesn't need to run Core/Collector separately.
     unawaited(_maybeStartLocalAgent());
@@ -79,6 +95,7 @@ class _AppShellState extends State<AppShell> {
     _trackingTimer?.cancel();
     _trackingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _refreshTracking();
+      TrayController.instance.refreshStatus();
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -323,6 +340,7 @@ class _AppShellState extends State<AppShell> {
     });
 
     unawaited(_maybeStartLocalAgent());
+    unawaited(TrayController.instance.refreshStatus());
     await _refreshTracking();
     _todayKey.currentState?.refresh();
     _searchKey.currentState?.refresh();

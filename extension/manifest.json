@@ -3,7 +3,7 @@
   "name": "RecorderPhone (Domain Tracker)",
   "version": "0.1.0",
   "description": "Domain-level active tab tracking for RecorderPhone (sends only hostname by default).",
-  "permissions": ["tabs", "storage", "alarms"],
+  "permissions": ["tabs", "storage", "alarms", "offscreen"],
   "host_permissions": ["http://127.0.0.1:*/*", "http://localhost:*/*"],
   "background": {
     "service_worker": "service_worker.js",
@@ -14,4 +14,3 @@
     "default_popup": "popup.html"
   }
 }
-

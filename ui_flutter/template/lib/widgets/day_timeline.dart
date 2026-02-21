@@ -49,6 +49,8 @@ class DayTimeline extends StatelessWidget {
     this.laneHeight = 56,
     this.barHeight = 18,
     this.showNowIndicator = true,
+    this.zoom = 1.0,
+    this.horizontalController,
     this.onLaneTap,
     this.onBarTap,
   });
@@ -58,6 +60,8 @@ class DayTimeline extends StatelessWidget {
   final double laneHeight;
   final double barHeight;
   final bool showNowIndicator;
+  final double zoom;
+  final ScrollController? horizontalController;
   final void Function(DayTimelineLane lane)? onLaneTap;
   final void Function(DayTimelineLane lane, DayTimelineBar bar)? onBarTap;
 
@@ -228,6 +232,9 @@ class DayTimeline extends StatelessWidget {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final chartWidth = (width - labelWidth).clamp(0.0, width).toDouble();
+        final z = zoom.clamp(1.0, 6.0);
+        final zoomedWidth = (chartWidth * z).clamp(chartWidth, chartWidth * 6.0).toDouble();
+        final hCtrl = horizontalController;
 
         final labels = Column(
           children: [
@@ -289,28 +296,60 @@ class DayTimeline extends StatelessWidget {
           ],
         );
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                SizedBox(width: labelWidth.toDouble()),
-                Expanded(child: axisHeader(chartWidth)),
-              ],
-            ),
-            const SizedBox(height: RecorderTokens.space2),
-            Row(
+        Widget chartColumn() {
+          final child = SizedBox(
+            width: zoomedWidth,
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(width: labelWidth, child: labels),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(RecorderTokens.radiusM.toDouble()),
-                    child: timelineArea(chartWidth),
-                  ),
+                axisHeader(zoomedWidth),
+                const SizedBox(height: RecorderTokens.space2),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(RecorderTokens.radiusM.toDouble()),
+                  child: timelineArea(zoomedWidth),
                 ),
               ],
             ),
+          );
+
+          if (z <= 1.01) {
+            return child;
+          }
+
+          if (hCtrl == null) {
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              primary: false,
+              child: child,
+            );
+          }
+
+          return Scrollbar(
+            controller: hCtrl,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              controller: hCtrl,
+              primary: false,
+              child: child,
+            ),
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: labelWidth,
+              child: Column(
+                children: [
+                  const SizedBox(height: 24),
+                  const SizedBox(height: RecorderTokens.space2),
+                  labels,
+                ],
+              ),
+            ),
+            Expanded(child: chartColumn()),
           ],
         );
       },

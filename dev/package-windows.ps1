@@ -16,10 +16,17 @@ Write-Host "[package] repo: $RepoRoot"
 function Invoke-Robocopy {
   param(
     [Parameter(Mandatory = $true)][string]$From,
-    [Parameter(Mandatory = $true)][string]$To
+    [Parameter(Mandatory = $true)][string]$To,
+    [string[]]$ExcludeFiles = @()
   )
 
-  robocopy $From $To /MIR | Out-Host
+  # Use small retry counts to avoid "hang forever" when something is locked.
+  $common = @("/E", "/DCOPY:DA", "/COPY:DAT", "/R:3", "/W:1")
+  if ($ExcludeFiles -and $ExcludeFiles.Count -gt 0) {
+    robocopy $From $To @common /XF $ExcludeFiles | Out-Host
+  } else {
+    robocopy $From $To @common | Out-Host
+  }
   $code = $LASTEXITCODE
   # robocopy exit codes: < 8 are success (0..7). >= 8 indicates failure.
   if ($code -ge 8) {
@@ -89,13 +96,40 @@ function Stop-ProcessByExecutablePath {
     $procs = Get-CimInstance Win32_Process -Filter "Name='$name'" -ErrorAction SilentlyContinue
     foreach ($p in $procs) {
       $ep = $p.ExecutablePath
-      if ($ep -and ($ep -ieq $full)) {
-        Write-Host "[package] stopping $name pid=$($p.ProcessId)"
-        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-      }
+      # ExecutablePath may be null without elevation; in that case stop by name (best effort).
+      $shouldStop = ($null -eq $ep) -or ($ep -and ($ep -ieq $full))
+      if (-not $shouldStop) { continue }
+      Write-Host "[package] stopping $name pid=$($p.ProcessId)"
+      Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
   } catch {
     # best effort
+  }
+}
+
+function Stop-ProcessByNameBestEffort {
+  param([Parameter(Mandatory = $true)][string]$Name)
+  try {
+    Get-Process $Name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  } catch {
+    # best effort
+  }
+}
+
+function Remove-DirectoryWithRetry {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [int]$Attempts = 6
+  )
+  if (-not (Test-Path $Path)) { return }
+  for ($i = 0; $i -lt $Attempts; $i++) {
+    try {
+      Remove-Item -Recurse -Force $Path -ErrorAction Stop
+      return
+    } catch {
+      if ($i -ge ($Attempts - 1)) { throw }
+      Start-Sleep -Milliseconds 300
+    }
   }
 }
 
@@ -104,20 +138,54 @@ Stop-ProcessByExecutablePath (Join-Path $OutDir "RecorderPhone.exe")
 Stop-ProcessByExecutablePath (Join-Path $OutDir "recorderphone_ui.exe")
 Stop-ProcessByExecutablePath (Join-Path $OutDir "recorder_core.exe")
 Stop-ProcessByExecutablePath (Join-Path $OutDir "windows_collector.exe")
+# Also stop any remaining processes by image name (handles cases where ExecutablePath is not accessible).
+Stop-ProcessByNameBestEffort "RecorderPhone"
+Stop-ProcessByNameBestEffort "recorderphone_ui"
+Stop-ProcessByNameBestEffort "recorder_core"
+Stop-ProcessByNameBestEffort "windows_collector"
 Start-Sleep -Milliseconds 200
 
+# Prefer a clean output folder to avoid stale Flutter artifacts and avoid robocopy trying to delete "extra files".
+try {
+  Remove-DirectoryWithRetry -Path $OutDir
+} catch {
+  Write-Host "[package] warn: failed to clean $OutDir; will update in-place. Close RecorderPhone if files are locked."
+}
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 Invoke-Robocopy -From $flutterReleaseDir -To $OutDir
 
 # Bundle agent binaries next to the UI exe so the app can start them in "packaged mode".
-Copy-Item -Force $coreExe (Join-Path $OutDir "recorder_core.exe")
-Copy-Item -Force $collectorExe (Join-Path $OutDir "windows_collector.exe")
+function Copy-ItemWithRetry {
+  param(
+    [Parameter(Mandatory = $true)][string]$From,
+    [Parameter(Mandatory = $true)][string]$To,
+    [int]$Attempts = 6
+  )
+  for ($i = 0; $i -lt $Attempts; $i++) {
+    try {
+      Copy-Item -Force $From $To
+      return
+    } catch {
+      if ($i -ge ($Attempts - 1)) { throw }
+      Start-Sleep -Milliseconds 300
+    }
+  }
+}
+
+try {
+  Copy-ItemWithRetry -From $coreExe -To (Join-Path $OutDir "recorder_core.exe")
+  Copy-ItemWithRetry -From $collectorExe -To (Join-Path $OutDir "windows_collector.exe")
+} catch {
+  throw "Failed to overwrite agent binaries in $OutDir. Close RecorderPhone / stop agent and retry."
+}
 
 # Resolve UI entrypoint exe.
 $uiExe = Join-Path $OutDir "recorderphone_ui.exe"
 $distExe = Join-Path $OutDir "RecorderPhone.exe"
 
 if ((Test-Path $uiExe) -and (-not (Test-Path $distExe))) {
+  Move-Item -Force $uiExe $distExe
+} elseif (Test-Path $uiExe) {
   Move-Item -Force $uiExe $distExe
 }
 

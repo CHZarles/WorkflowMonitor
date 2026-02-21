@@ -459,25 +459,51 @@ class EventRecord {
 
 class NowSnapshot {
   NowSnapshot({
+    required this.serverTs,
+    required this.focusTtlSeconds,
+    required this.audioTtlSeconds,
     required this.latestEventId,
     required this.latestEvent,
+    required this.latestEventAgeSeconds,
     required this.appActive,
+    required this.appActiveAgeSeconds,
     required this.tabFocus,
+    required this.tabFocusAgeSeconds,
     required this.tabAudio,
     required this.tabAudioStop,
+    required this.tabAudioAgeSeconds,
+    required this.tabAudioActive,
     required this.appAudio,
     required this.appAudioStop,
+    required this.appAudioAgeSeconds,
+    required this.appAudioActive,
+    required this.nowFocusApp,
+    required this.nowUsingTab,
+    required this.nowBackgroundAudio,
     required this.latestTitles,
   });
 
+  final String serverTs;
+  final int focusTtlSeconds;
+  final int audioTtlSeconds;
   final int? latestEventId;
   final EventRecord? latestEvent;
+  final int? latestEventAgeSeconds;
   final EventRecord? appActive;
+  final int? appActiveAgeSeconds;
   final EventRecord? tabFocus;
+  final int? tabFocusAgeSeconds;
   final EventRecord? tabAudio;
   final EventRecord? tabAudioStop;
+  final int? tabAudioAgeSeconds;
+  final bool tabAudioActive;
   final EventRecord? appAudio;
   final EventRecord? appAudioStop;
+  final int? appAudioAgeSeconds;
+  final bool appAudioActive;
+  final EventRecord? nowFocusApp;
+  final EventRecord? nowUsingTab;
+  final EventRecord? nowBackgroundAudio;
   final Map<String, String> latestTitles; // key: "app|<entity>" or "domain|<hostname>"
 
   factory NowSnapshot.fromJson(Map<String, dynamic> json) {
@@ -502,14 +528,27 @@ class NowSnapshot {
     }
 
     return NowSnapshot(
+      serverTs: json["server_ts"] as String? ?? "",
+      focusTtlSeconds: (json["focus_ttl_seconds"] as int?) ?? (3 * 60),
+      audioTtlSeconds: (json["audio_ttl_seconds"] as int?) ?? 120,
       latestEventId: json["latest_event_id"] as int?,
       latestEvent: parseEvent("latest_event"),
+      latestEventAgeSeconds: json["latest_event_age_seconds"] as int?,
       appActive: parseEvent("app_active"),
+      appActiveAgeSeconds: json["app_active_age_seconds"] as int?,
       tabFocus: parseEvent("tab_focus"),
+      tabFocusAgeSeconds: json["tab_focus_age_seconds"] as int?,
       tabAudio: parseEvent("tab_audio"),
       tabAudioStop: parseEvent("tab_audio_stop"),
+      tabAudioAgeSeconds: json["tab_audio_age_seconds"] as int?,
+      tabAudioActive: json["tab_audio_active"] as bool? ?? false,
       appAudio: parseEvent("app_audio"),
       appAudioStop: parseEvent("app_audio_stop"),
+      appAudioAgeSeconds: json["app_audio_age_seconds"] as int?,
+      appAudioActive: json["app_audio_active"] as bool? ?? false,
+      nowFocusApp: parseEvent("now_focus_app"),
+      nowUsingTab: parseEvent("now_using_tab"),
+      nowBackgroundAudio: parseEvent("now_background_audio"),
       latestTitles: titles,
     );
   }

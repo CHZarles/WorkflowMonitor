@@ -133,8 +133,9 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
     let mut last_audio: Option<AudioAppInfo> = None;
     let mut last_audio_sent_at = Instant::now();
 
-    let mut last_review_check =
-        Instant::now().checked_sub(Duration::from_secs(args.review_notify_check_seconds)).unwrap_or_else(Instant::now);
+    let mut last_review_check = Instant::now()
+        .checked_sub(Duration::from_secs(args.review_notify_check_seconds))
+        .unwrap_or_else(Instant::now);
     let mut review_snooze_until: Option<Instant> = None;
     let mut last_review_notified_block_id: Option<String> = None;
 
@@ -156,7 +157,11 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("pid:{pid}"));
             if pid != 0 {
-                let title_for_key = if args.send_title { title.clone() } else { String::new() };
+                let title_for_key = if args.send_title {
+                    title.clone()
+                } else {
+                    String::new()
+                };
                 let key = (app.clone(), pid, title_for_key);
                 let due_heartbeat =
                     last_sent_at.elapsed() >= Duration::from_secs(args.heartbeat_seconds);
@@ -208,15 +213,11 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
             } else if let Some(key) = audio {
                 let due_heartbeat =
                     last_audio_sent_at.elapsed() >= Duration::from_secs(args.heartbeat_seconds);
-                if last_audio
-                    .as_ref()
-                    .map(|k| (k.pid, k.app.as_str()))
+                if last_audio.as_ref().map(|k| (k.pid, k.app.as_str()))
                     != Some((key.pid, key.app.as_str()))
                     || due_heartbeat
                 {
-                    if last_audio
-                        .as_ref()
-                        .map(|k| (k.pid, k.app.as_str()))
+                    if last_audio.as_ref().map(|k| (k.pid, k.app.as_str()))
                         != Some((key.pid, key.app.as_str()))
                     {
                         info!("audio app changed: {} (pid {})", key.app, key.pid);
@@ -270,7 +271,8 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
         }
 
         if args.review_notify && idle_s < args.idle_cutoff_seconds {
-            let check_due = last_review_check.elapsed() >= Duration::from_secs(args.review_notify_check_seconds);
+            let check_due = last_review_check.elapsed()
+                >= Duration::from_secs(args.review_notify_check_seconds);
             if check_due {
                 last_review_check = Instant::now();
                 if let Err(e) = maybe_notify_due_review_block(
@@ -456,7 +458,11 @@ async fn maybe_notify_due_review_block(
         return Ok(());
     }
 
-    let range = format!("{}–{}", format_hhmm(&due.start_ts), format_hhmm(&due.end_ts));
+    let range = format!(
+        "{}–{}",
+        format_hhmm(&due.start_ts),
+        format_hhmm(&due.end_ts)
+    );
     let top = due
         .top_items
         .iter()
@@ -464,7 +470,11 @@ async fn maybe_notify_due_review_block(
         .map(|it| format!("{} {}", display_top_name(it), format_duration(it.seconds)))
         .collect::<Vec<_>>()
         .join(" · ");
-    let top_line = if top.trim().is_empty() { "Top: (none)".to_string() } else { format!("Top: {top}") };
+    let top_line = if top.trim().is_empty() {
+        "Top: (none)".to_string()
+    } else {
+        format!("Top: {top}")
+    };
 
     // Best-effort toast notification (click -> open Quick Review via custom protocol).
     //
@@ -475,7 +485,10 @@ async fn maybe_notify_due_review_block(
         use win_toast_notify::{Action, ActivationType, Duration, Scenario, WinToastNotify};
 
         let deep_link = format!("recorderphone://review?block={}", due.id.as_str());
-        let skip_link = format!("recorderphone://review?action=skip&block={}", due.id.as_str());
+        let skip_link = format!(
+            "recorderphone://review?action=skip&block={}",
+            due.id.as_str()
+        );
         let pause_link = "recorderphone://review?action=pause&minutes=15".to_string();
         let _ = WinToastNotify::new()
             .set_open(deep_link.as_str())
@@ -507,7 +520,8 @@ async fn maybe_notify_due_review_block(
     }
 
     *last_block_id = Some(due.id.clone());
-    *snooze_until = Some(std::time::Instant::now() + Duration::from_secs(repeat_minutes.max(1) * 60));
+    *snooze_until =
+        Some(std::time::Instant::now() + Duration::from_secs(repeat_minutes.max(1) * 60));
     Ok(())
 }
 
@@ -541,7 +555,9 @@ fn system_idle_seconds() -> u64 {
 #[cfg(windows)]
 fn foreground_app() -> ForegroundApp {
     use windows_sys::Win32::Foundation::{CloseHandle, HWND};
-    use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
     };
@@ -591,7 +607,11 @@ fn foreground_app() -> ForegroundApp {
             }
         };
 
-        ForegroundApp { pid, title, exe_path }
+        ForegroundApp {
+            pid,
+            title,
+            exe_path,
+        }
     }
 }
 
@@ -600,10 +620,12 @@ fn active_audio_app(preferred_pid: Option<u32>) -> anyhow::Result<Option<AudioAp
     use std::path::Path;
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
-        eMultimedia, eRender, AudioSessionStateActive, IAudioSessionControl2, IAudioSessionManager2,
-        IMMDeviceEnumerator, MMDeviceEnumerator,
+        eMultimedia, eRender, AudioSessionStateActive, IAudioSessionControl2,
+        IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator,
     };
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
 
     struct ComGuard;
     impl Drop for ComGuard {

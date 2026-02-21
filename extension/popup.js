@@ -3,6 +3,7 @@ const DEFAULTS = {
   serverUrl: "http://127.0.0.1:17600",
   sendTitle: false,
   trackBackgroundAudio: true,
+  keepAlive: true,
   heartbeatSeconds: 60
 };
 
@@ -17,6 +18,7 @@ async function load() {
   byId("enabled").checked = !!settings.enabled;
   byId("sendTitle").checked = !!settings.sendTitle;
   byId("trackBgAudio").checked = settings.trackBackgroundAudio !== false;
+  byId("keepAlive").checked = settings.keepAlive !== false;
   byId("serverUrl").value = settings.serverUrl || DEFAULTS.serverUrl;
 
   const { status } = await chrome.storage.local.get("status");
@@ -72,8 +74,9 @@ async function save() {
   const enabled = byId("enabled").checked;
   const sendTitle = byId("sendTitle").checked;
   const trackBackgroundAudio = byId("trackBgAudio").checked;
+  const keepAlive = byId("keepAlive").checked;
   const serverUrl = byId("serverUrl").value.trim() || DEFAULTS.serverUrl;
-  await chrome.storage.sync.set({ enabled, sendTitle, trackBackgroundAudio, serverUrl });
+  await chrome.storage.sync.set({ enabled, sendTitle, trackBackgroundAudio, keepAlive, serverUrl });
 }
 
 async function testHealth() {
@@ -111,6 +114,7 @@ async function forceEmit() {
 byId("enabled").addEventListener("change", save);
 byId("sendTitle").addEventListener("change", save);
 byId("trackBgAudio").addEventListener("change", save);
+byId("keepAlive").addEventListener("change", save);
 byId("serverUrl").addEventListener("change", save);
 byId("testHealth").addEventListener("click", testHealth);
 byId("forceEmit").addEventListener("click", forceEmit);
