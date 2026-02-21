@@ -395,6 +395,7 @@ class _AppShellState extends State<AppShell> {
         client: _client,
         serverUrl: _serverUrl,
         onServerUrlChanged: _setServerUrl,
+        isActive: _index == 2,
       ),
     ];
 

@@ -18,11 +18,13 @@ class SettingsScreen extends StatefulWidget {
     required this.client,
     required this.serverUrl,
     required this.onServerUrlChanged,
+    this.isActive = false,
   });
 
   final CoreClient client;
   final String serverUrl;
   final Future<void> Function(String url) onServerUrlChanged;
+  final bool isActive;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -196,6 +198,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void didUpdateWidget(covariant SettingsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.serverUrl != widget.serverUrl) {
+      _refreshAll();
+    }
+    if (!oldWidget.isActive && widget.isActive) {
+      // Settings is shown via IndexedStack. Refresh on entry so users don't have to manually
+      // click "Refresh" after Core becomes healthy (e.g. when the desktop agent starts up).
       _refreshAll();
     }
   }
