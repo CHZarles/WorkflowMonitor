@@ -46,6 +46,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _coreSettingsLoading = false;
   bool _coreSettingsSaving = false;
+  bool _coreNumbersSaving = false;
+  bool _privacySaving = false;
   String? _coreSettingsError;
   CoreSettings? _coreSettings;
   bool _storeTitles = false;
@@ -299,6 +301,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() {
       _coreSettingsSaving = true;
+      _coreNumbersSaving = true;
+      _privacySaving = false;
       _coreSettingsError = null;
     });
 
@@ -319,7 +323,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() => _coreSettingsError = e.toString());
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save failed: $e")));
     } finally {
-      if (mounted) setState(() => _coreSettingsSaving = false);
+      if (mounted) {
+        setState(() {
+          _coreSettingsSaving = false;
+          _coreNumbersSaving = false;
+        });
+      }
     }
   }
 
@@ -336,6 +345,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() {
       _coreSettingsSaving = true;
+      _coreNumbersSaving = false;
+      _privacySaving = true;
       _coreSettingsError = null;
     });
 
@@ -353,8 +364,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Best-effort: reload persisted state to avoid UI drift.
       unawaited(_loadCoreSettings());
     } finally {
-      if (mounted) setState(() => _coreSettingsSaving = false);
+      if (mounted) {
+        setState(() {
+          _coreSettingsSaving = false;
+          _privacySaving = false;
+        });
+      }
     }
+  }
+
+  bool _blockIdleDirty() {
+    final s = _coreSettings;
+    if (s == null) return false;
+    final expectedBlock = _minsFromSeconds(s.blockSeconds).toString();
+    final expectedIdle = _minsFromSeconds(s.idleCutoffSeconds).toString();
+    return _blockMinutes.text.trim() != expectedBlock || _idleCutoffMinutes.text.trim() != expectedIdle;
   }
 
   _PrivacyLevel _privacyLevel() {
@@ -1388,6 +1412,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   ),
+                  Builder(
+                    builder: (context) {
+                      final dirty = _blockIdleDirty();
+                      if (!dirty && !_coreNumbersSaving) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: RecorderTokens.space3),
+                        child: FilledButton.icon(
+                          onPressed: (_coreNumbersSaving || !dirty) ? null : _saveCoreSettings,
+                          icon: const Icon(Icons.save_outlined),
+                          label: _coreNumbersSaving ? const Text("Saving…") : const Text("Save block/idle"),
+                        ),
+                      );
+                    },
+                  ),
                   const SizedBox(height: RecorderTokens.space3),
                   const Divider(),
                   const SizedBox(height: RecorderTokens.space2),
@@ -1465,7 +1503,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Padding(
                     padding: const EdgeInsets.only(top: RecorderTokens.space1),
                     child: Text(
-                      _coreSettingsSaving && _privacyDirty() ? "Saving privacy…" : "Privacy changes are saved automatically.",
+                      _privacySaving ? "Saving privacy…" : "Privacy changes are saved automatically.",
                       style: Theme.of(context).textTheme.labelMedium,
                     ),
                   ),
@@ -1495,24 +1533,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ],
                   ],
-                  const SizedBox(height: RecorderTokens.space4),
-                  Builder(
-                    builder: (context) {
-                      final dirtyBlock = (() {
-                        final s = _coreSettings;
-                        if (s == null) return false;
-                        final expectedBlock = _minsFromSeconds(s.blockSeconds).toString();
-                        final expectedIdle = _minsFromSeconds(s.idleCutoffSeconds).toString();
-                        return _blockMinutes.text.trim() != expectedBlock || _idleCutoffMinutes.text.trim() != expectedIdle;
-                      })();
-
-                      return FilledButton.icon(
-                        onPressed: (_coreSettingsSaving || !dirtyBlock) ? null : _saveCoreSettings,
-                        icon: const Icon(Icons.save_outlined),
-                        label: _coreSettingsSaving ? const Text("Saving…") : const Text("Save block/idle"),
-                      );
-                    },
-                  ),
                 ],
               ],
             ),
