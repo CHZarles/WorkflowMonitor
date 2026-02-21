@@ -30,8 +30,10 @@ async function load() {
 
 function renderStatus(status) {
   const line = byId("statusLine");
+  const diag = byId("diagLine");
   if (!status) {
     line.textContent = "(no data yet)";
+    diag.textContent = "";
     return;
   }
 
@@ -67,6 +69,22 @@ function renderStatus(status) {
     if (lastAttempt) extra.push(`last_try=${lastAttempt}`);
     if (lastOk) extra.push(`last_ok=${lastOk}`);
     line.textContent = `${status.ts}  |  error  |  ${err}${extra.length ? `  |  ${extra.join("  ")}` : ""}`;
+  }
+
+  const off = status.offscreen || {};
+  if (typeof off.supported === "boolean") {
+    const parts = [];
+    parts.push(`keepAlive=${byId("keepAlive").checked ? "on" : "off"}`);
+    if (!off.supported) {
+      parts.push("offscreen=unsupported");
+    } else {
+      const desired = off.desired === true ? "on" : "off";
+      const has = off.hasDocument === true ? "active" : "inactive";
+      parts.push(`offscreen=${desired}/${has}`);
+    }
+    diag.textContent = parts.join("  |  ");
+  } else {
+    diag.textContent = "";
   }
 }
 
@@ -111,6 +129,19 @@ async function forceEmit() {
   }
 }
 
+async function repair() {
+  const btn = byId("repair");
+  btn.disabled = true;
+  try {
+    await chrome.runtime.sendMessage({ type: "repair" });
+    await forceEmit();
+  } catch {
+    // ignore
+  } finally {
+    setTimeout(() => (btn.disabled = false), 400);
+  }
+}
+
 byId("enabled").addEventListener("change", save);
 byId("sendTitle").addEventListener("change", save);
 byId("trackBgAudio").addEventListener("change", save);
@@ -118,6 +149,7 @@ byId("keepAlive").addEventListener("change", save);
 byId("serverUrl").addEventListener("change", save);
 byId("testHealth").addEventListener("click", testHealth);
 byId("forceEmit").addEventListener("click", forceEmit);
+byId("repair").addEventListener("click", repair);
 
 chrome.storage.local.onChanged.addListener((changes) => {
   if (changes.status) renderStatus(changes.status.newValue);

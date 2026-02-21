@@ -1319,7 +1319,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             const SizedBox(width: RecorderTokens.space1),
                             const Expanded(
                               child: Text(
-                                "Browser looks active, but tab tracking is stale.\nOpen the extension popup → check Enable tracking + Server URL, then click “Force send”. If it keeps happening, enable “Keep alive (stability)”.",
+                                "Browser looks active, but tab tracking is stale.\nOpen the extension popup → check Enable tracking + Server URL, then click “Force send”. If it keeps happening, enable “Keep alive (stability)” and click “Repair”.",
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               ),

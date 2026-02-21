@@ -22,6 +22,8 @@ const STATE = {
 
 let _stateLoaded = false;
 let _offscreenSyncing = null;
+let _bootstrapping = null;
+let _lastOffscreen = { supported: false, desired: false, hasDocument: false, checkedAtMs: 0, error: null };
 
 function nowIso() {
   return new Date().toISOString();
@@ -119,6 +121,30 @@ async function getSettings() {
   return { ...DEFAULTS, ...stored };
 }
 
+async function checkOffscreen(settings) {
+  const supported = !!chrome.offscreen && typeof chrome.offscreen.hasDocument === "function";
+  const desired = settings.enabled !== false && settings.keepAlive !== false;
+  let hasDocument = false;
+  let error = null;
+  if (supported) {
+    try {
+      hasDocument = await chrome.offscreen.hasDocument();
+    } catch (e) {
+      error = String(e);
+      hasDocument = false;
+    }
+  }
+
+  _lastOffscreen = {
+    supported,
+    desired,
+    hasDocument,
+    checkedAtMs: Date.now(),
+    error
+  };
+  return _lastOffscreen;
+}
+
 async function syncOffscreenDocument(settings) {
   if (!chrome.offscreen || typeof chrome.offscreen.hasDocument !== "function") return;
 
@@ -133,6 +159,13 @@ async function syncOffscreenDocument(settings) {
     } catch {
       has = false;
     }
+    _lastOffscreen = {
+      supported: true,
+      desired,
+      hasDocument: has,
+      checkedAtMs: Date.now(),
+      error: null
+    };
 
     if (!desired) {
       if (!has) return;
@@ -153,6 +186,13 @@ async function syncOffscreenDocument(settings) {
         reasons: [reason],
         justification: "Keep the service worker responsive for reliable tab/audio tracking."
       });
+      _lastOffscreen = {
+        supported: true,
+        desired,
+        hasDocument: true,
+        checkedAtMs: Date.now(),
+        error: null
+      };
     } catch {
       // ignore (API may be unavailable in some browsers)
     }
@@ -170,7 +210,8 @@ async function setStatus(partial) {
     lastOkTs: msToIso(STATE.lastOkAtMs),
     lastErrorTs: msToIso(STATE.lastErrorAtMs),
     consecutiveErrors: STATE.consecutiveErrors,
-    lastError: STATE.lastError
+    lastError: STATE.lastError,
+    offscreen: _lastOffscreen
   };
 
   await chrome.storage.local.set({ status: { ...base, ...partial } });
@@ -206,6 +247,24 @@ async function ensureHeartbeatAlarm() {
   } catch {
     // ignore
   }
+}
+
+async function bootstrap() {
+  if (_bootstrapping) return _bootstrapping;
+  _bootstrapping = (async () => {
+    await ensureStateLoaded();
+    const settings = await getSettings();
+    await checkOffscreen(settings);
+    await syncOffscreenDocument(settings);
+    await ensureHeartbeatAlarm();
+    await setStatus({ ok: true, info: "boot" });
+    await emitActiveTabEventSafe();
+  })()
+    .catch(() => {})
+    .finally(() => {
+      _bootstrapping = null;
+    });
+  return _bootstrapping;
 }
 
 async function maybeEmitAudioStop(settings, reason) {
@@ -254,6 +313,7 @@ async function emitActiveTabEvent({ force = false } = {}) {
   await ensureStateLoaded();
 
   const settings = await getSettings();
+  await checkOffscreen(settings);
   await syncOffscreenDocument(settings);
   if (!settings.enabled) return;
 
@@ -437,6 +497,76 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (type === "diagnose") {
+    (async () => {
+      await ensureStateLoaded();
+      const settings = await getSettings();
+      await checkOffscreen(settings);
+      await syncOffscreenDocument(settings);
+      return {
+        ok: true,
+        settings: {
+          enabled: settings.enabled !== false,
+          serverUrl: settings.serverUrl,
+          sendTitle: settings.sendTitle === true,
+          trackBackgroundAudio: settings.trackBackgroundAudio !== false,
+          keepAlive: settings.keepAlive !== false,
+          heartbeatSeconds: settings.heartbeatSeconds ?? DEFAULTS.heartbeatSeconds
+        },
+        offscreen: _lastOffscreen,
+        state: {
+          lastDomain: STATE.lastDomain,
+          lastActivity: STATE.lastActivity,
+          lastTabId: STATE.lastTabId,
+          lastWindowId: STATE.lastWindowId,
+          lastSentAtMs: STATE.lastSentAtMs,
+          lastAttemptAtMs: STATE.lastAttemptAtMs,
+          lastOkAtMs: STATE.lastOkAtMs,
+          consecutiveErrors: STATE.consecutiveErrors,
+          lastError: STATE.lastError,
+          lastErrorAtMs: STATE.lastErrorAtMs
+        }
+      };
+    })()
+      .then((data) => sendResponse(data))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
+  if (type === "repair") {
+    (async () => {
+      await ensureStateLoaded();
+      const settings = await getSettings();
+      await checkOffscreen(settings);
+      await ensureHeartbeatAlarm();
+      // Best-effort: close and re-create the offscreen document to refresh keep-alive.
+      if (_lastOffscreen.supported && settings.keepAlive !== false && settings.enabled !== false) {
+        try {
+          const has = await chrome.offscreen.hasDocument();
+          if (has) {
+            await chrome.offscreen.closeDocument();
+          }
+        } catch {
+          // ignore
+        }
+        await syncOffscreenDocument(settings);
+      }
+
+      // Clear error counters and persist.
+      STATE.consecutiveErrors = 0;
+      STATE.lastError = null;
+      STATE.lastErrorAtMs = 0;
+      await persistState();
+
+      await setStatus({ ok: true, info: "repaired" });
+      await emitActiveTabEventSafe({ force: true });
+      return { ok: true };
+    })()
+      .then((data) => sendResponse(data))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
   if (type !== "forceEmit") return;
 
   emitActiveTabEventSafe({ force: true })
@@ -452,3 +582,6 @@ try {
 } catch {
   // ignore
 }
+
+// Also bootstrap keep-alive + status whenever the worker starts.
+bootstrap();
