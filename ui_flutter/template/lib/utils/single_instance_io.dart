@@ -24,7 +24,7 @@ String? _extractDeepLink(List<String> args) {
   return null;
 }
 
-Future<void> _forwardToPrimary(List<String> args) async {
+Future<bool> _forwardToPrimary(List<String> args) async {
   final msg = _extractDeepLink(args) ?? _cmdShow;
 
   try {
@@ -35,10 +35,25 @@ Future<void> _forwardToPrimary(List<String> args) async {
     );
     socket.write("$msg\n");
     await socket.flush();
+    try {
+      final line = await socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .timeout(const Duration(milliseconds: 250))
+          .first;
+      if (line.trim() == "ok") {
+        socket.destroy();
+        return true;
+      }
+    } catch (_) {
+      // ignore
+    }
     socket.destroy();
   } catch (_) {
     // If forwarding fails, fall back to starting a new instance (best effort).
   }
+  return false;
 }
 
 Future<SingleInstanceHandle?> ensureSingleInstanceImpl(List<String> args) async {
@@ -57,9 +72,12 @@ Future<SingleInstanceHandle?> ensureSingleInstanceImpl(List<String> args) async 
     server = await ServerSocket.bind(InternetAddress.loopbackIPv4, _uiControlPort);
   } on SocketException {
     // Another instance is likely already running: forward and exit.
-    await _forwardToPrimary(args);
+    final forwarded = await _forwardToPrimary(args);
     await controller.close();
-    return null;
+    if (forwarded) return null;
+    // If forwarding didn't succeed (e.g. port collision with another app),
+    // do not block startup; run without single-instance enforcement.
+    return SingleInstanceHandle(messages: const Stream.empty(), dispose: () async {});
   } catch (_) {
     // Unexpected error: do not block startup.
     await controller.close();
