@@ -23,7 +23,7 @@
 ## 联调
 - 先运行 Core（默认监听 `127.0.0.1:17600`）：`cargo run -p recorder_core -- --listen 127.0.0.1:17600`
 - 打开 popup 点击 `Test /health` 应显示 OK
-- 如果状态不更新/怀疑 service worker 没醒：点一次 `Force send`
+- 如果状态不更新/怀疑 service worker 没醒：先点一次 `Force send`，不行再点 `Repair`
 - 打开任意网页并切换 tab：Core 的 `GET /events` 会出现域名事件
 
 ### 常见问题
@@ -33,7 +33,8 @@ A：多数情况下并不需要 reload。优先按下面顺序排查：
 2) 确认 `Server URL` 指向正在运行的 Core（`Test /health` 必须是 OK）  
 3) 确认 `Keep alive (stability)` 为 ON（可显著减少 MV3 休眠带来的“断更”）  
 4) 点击一次 `Force send`（会立刻尝试发送当前 tab / audible tab）  
-5) 只有当 popup 里持续报错、且 `Force send` 也无效时，再考虑 reload 扩展/重启浏览器
+5) 点击一次 `Repair`（会重建 keep-alive/offscreen 并清理错误计数，然后强制上报一次）  
+6) 只有当 popup 里持续报错、且 `Force send/Repair` 都无效时，再考虑 reload 扩展/重启浏览器
 
 **Q：我想看 YouTube 视频标题，而不是只看到 youtube.com？**  
 A：需要两步都打开：
