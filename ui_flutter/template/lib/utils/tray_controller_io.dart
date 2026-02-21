@@ -268,8 +268,14 @@ class _IoTrayController with WindowListener implements TrayController {
     await _tray.initSystemTray(title: "RecorderPhone", iconPath: iconPath);
 
     _tray.registerSystemTrayEventHandler((eventName) {
-      if (eventName == kSystemTrayEventClick) {
+      if (eventName == kSystemTrayEventClick || eventName == kSystemTrayEventDoubleClick) {
         unawaited(_toggleWindow());
+        return;
+      }
+
+      if (eventName == kSystemTrayEventRightClick) {
+        // On Windows, right-click does not automatically show the context menu.
+        unawaited(_tray.popUpContextMenu());
       }
     });
 
