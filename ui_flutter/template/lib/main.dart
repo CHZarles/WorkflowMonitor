@@ -1,6 +1,7 @@
 import "package:flutter/material.dart";
 
 import "utils/platform_args.dart";
+import "utils/single_instance.dart";
 
 import "screens/app_shell.dart";
 import "theme/recorder_theme.dart";
@@ -10,14 +11,33 @@ Future<void> main() async {
   final args = executableArgs();
   final deepLink = _extractDeepLink(args);
   final startMinimized = deepLink == null && _hasFlag(args, const ["--minimized", "--tray", "--background"]);
-  runApp(RecorderPhoneApp(initialDeepLink: deepLink, startMinimized: startMinimized));
+
+  final single = await ensureSingleInstance(args);
+  if (single == null) {
+    // Another instance is running; args have been forwarded.
+    return;
+  }
+
+  runApp(
+    RecorderPhoneApp(
+      initialDeepLink: deepLink,
+      startMinimized: startMinimized,
+      externalCommands: single.messages,
+    ),
+  );
 }
 
 class RecorderPhoneApp extends StatelessWidget {
-  const RecorderPhoneApp({super.key, this.initialDeepLink, this.startMinimized = false});
+  const RecorderPhoneApp({
+    super.key,
+    this.initialDeepLink,
+    this.startMinimized = false,
+    this.externalCommands,
+  });
 
   final String? initialDeepLink;
   final bool startMinimized;
+  final Stream<String>? externalCommands;
 
   @override
   Widget build(BuildContext context) {
@@ -26,7 +46,11 @@ class RecorderPhoneApp extends StatelessWidget {
       theme: RecorderTheme.light(),
       darkTheme: RecorderTheme.dark(),
       themeMode: ThemeMode.system,
-      home: AppShell(initialDeepLink: initialDeepLink, startMinimized: startMinimized),
+      home: AppShell(
+        initialDeepLink: initialDeepLink,
+        startMinimized: startMinimized,
+        externalCommands: externalCommands,
+      ),
     );
   }
 }

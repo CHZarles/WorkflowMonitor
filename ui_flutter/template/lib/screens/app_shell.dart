@@ -2,6 +2,7 @@ import "dart:async";
 
 import "package:flutter/material.dart";
 import "package:shared_preferences/shared_preferences.dart";
+import "package:window_manager/window_manager.dart";
 
 import "../api/core_client.dart";
 import "../utils/desktop_agent.dart";
@@ -13,10 +14,16 @@ import "today_screen.dart";
 enum _TrackingAction { resume, pause15, pause60, pauseManual }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, this.initialDeepLink, this.startMinimized = false});
+  const AppShell({
+    super.key,
+    this.initialDeepLink,
+    this.startMinimized = false,
+    this.externalCommands,
+  });
 
   final String? initialDeepLink;
   final bool startMinimized;
+  final Stream<String>? externalCommands;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -38,6 +45,7 @@ class _AppShellState extends State<AppShell> {
   TrackingStatus? _tracking;
   Timer? _trackingTimer;
   bool _agentStartAttempted = false;
+  StreamSubscription<String>? _externalSub;
 
   String _normalizeServerUrl(String input) {
     final trimmed = input.trim();
@@ -55,13 +63,45 @@ class _AppShellState extends State<AppShell> {
   void initState() {
     super.initState();
     _loadPrefs();
+    _externalSub = widget.externalCommands?.listen((msg) {
+      _handleExternalCommand(msg);
+    });
   }
 
   @override
   void dispose() {
     _trackingTimer?.cancel();
+    _externalSub?.cancel();
     TrayController.instance.dispose();
     super.dispose();
+  }
+
+  Future<void> _showAndFocusWindow() async {
+    try {
+      await windowManager.show();
+      await windowManager.focus();
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  void _handleExternalCommand(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return;
+
+    if (s == "__show__") {
+      unawaited(_showAndFocusWindow());
+      return;
+    }
+
+    if (s.startsWith("recorderphone://")) {
+      unawaited(_showAndFocusWindow());
+      _handleDeepLink(s);
+      return;
+    }
+
+    // Unknown command: best-effort just bring the app to front.
+    unawaited(_showAndFocusWindow());
   }
 
   Future<void> _loadPrefs() async {
