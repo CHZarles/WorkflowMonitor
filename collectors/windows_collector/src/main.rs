@@ -93,6 +93,15 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
     use tokio::time::{sleep, Duration};
     use tracing::{error, info};
 
+    // Prevent duplicate collectors (which would double-count usage).
+    let _mutex = match ensure_single_instance_mutex() {
+        Ok(g) => g,
+        Err(e) => {
+            info!("windows_collector already running; exit ({e})");
+            return Ok(());
+        }
+    };
+
     #[derive(Serialize)]
     struct AppActiveEvent<'a> {
         v: i32,
@@ -290,6 +299,43 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
         }
 
         sleep(Duration::from_millis(args.poll_ms)).await;
+    }
+}
+
+#[cfg(windows)]
+struct MutexGuard(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for MutexGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn ensure_single_instance_mutex() -> anyhow::Result<MutexGuard> {
+    use std::iter;
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+
+    let name: Vec<u16> = "Local\\RecorderPhone.windows_collector"
+        .encode_utf16()
+        .chain(iter::once(0))
+        .collect();
+
+    unsafe {
+        let h = CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr());
+        if h == std::ptr::null_mut() {
+            anyhow::bail!("CreateMutexW_failed");
+        }
+        let err = GetLastError();
+        if err == ERROR_ALREADY_EXISTS {
+            windows_sys::Win32::Foundation::CloseHandle(h);
+            anyhow::bail!("already_exists");
+        }
+        Ok(MutexGuard(h))
     }
 }
 
