@@ -1,3 +1,5 @@
+import "dart:async";
+
 import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
@@ -304,16 +306,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final s = await widget.client.updateSettings(
         blockSeconds: blockMin * 60,
         idleCutoffSeconds: idleMin * 60,
+      );
+      if (!mounted) return;
+      setState(() {
+        _coreSettings = s;
+        _blockMinutes.text = _minsFromSeconds(s.blockSeconds).toString();
+        _idleCutoffMinutes.text = _minsFromSeconds(s.idleCutoffSeconds).toString();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Core settings saved")));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _coreSettingsError = e.toString());
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save failed: $e")));
+    } finally {
+      if (mounted) setState(() => _coreSettingsSaving = false);
+    }
+  }
+
+  bool _privacyDirty() {
+    final s = _coreSettings;
+    if (s == null) return false;
+    return s.storeTitles != _storeTitles || s.storeExePath != _storeExePath;
+  }
+
+  Future<void> _savePrivacySettings() async {
+    if (_coreSettingsSaving) return;
+    if (_coreSettings == null) return;
+    if (!_privacyDirty()) return;
+
+    setState(() {
+      _coreSettingsSaving = true;
+      _coreSettingsError = null;
+    });
+
+    try {
+      final s = await widget.client.updateSettings(
         storeTitles: _storeTitles,
         storeExePath: _storeExePath,
       );
       if (!mounted) return;
       setState(() => _coreSettings = s);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Settings saved")));
     } catch (e) {
       if (!mounted) return;
       setState(() => _coreSettingsError = e.toString());
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save failed: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Privacy save failed: $e")));
+      // Best-effort: reload persisted state to avoid UI drift.
+      unawaited(_loadCoreSettings());
     } finally {
       if (mounted) setState(() => _coreSettingsSaving = false);
     }
@@ -358,6 +396,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _storeTitles = level != _PrivacyLevel.l1;
       _storeExePath = level == _PrivacyLevel.l3;
     });
+    await _savePrivacySettings();
   }
 
   Future<void> _loadRules() async {
@@ -1086,7 +1125,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   _storeTitles = true;
                                   _storeExePath = false;
                                 });
-                                await _saveCoreSettings();
+                                await _savePrivacySettings();
                               },
                         child: const Text("Enable L2"),
                       ),
@@ -1378,10 +1417,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     value: _storeTitles,
                     onChanged: _coreSettingsSaving
                         ? null
-                        : (v) => setState(() {
+                        : (v) {
+                            setState(() {
                               _storeTitles = v;
                               if (!v) _storeExePath = false;
-                            }),
+                            });
+                            unawaited(_savePrivacySettings());
+                          },
                     contentPadding: EdgeInsets.zero,
                     title: const Text("Store window/tab titles (L2)"),
                     subtitle: const Text(
@@ -1392,13 +1434,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     value: _storeExePath,
                     onChanged: _coreSettingsSaving
                         ? null
-                        : (v) => setState(() {
+                        : (v) async {
+                            if (v && !_storeExePath) {
+                              final ok = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text("Enable L3 (high sensitivity)?"),
+                                  content: const Text(
+                                    "This stores full executable paths (and may contain usernames / project folders).\n\nYou can always turn it off later.",
+                                  ),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+                                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Enable")),
+                                  ],
+                                ),
+                              );
+                              if (ok != true) return;
+                            }
+
+                            setState(() {
                               _storeExePath = v;
                               if (v) _storeTitles = true;
-                            }),
+                            });
+                            await _savePrivacySettings();
+                          },
                     contentPadding: EdgeInsets.zero,
                     title: const Text("Store full exe path (high sensitivity)"),
                     subtitle: const Text("If off, Core drops exePath/pid fields."),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: RecorderTokens.space1),
+                    child: Text(
+                      _coreSettingsSaving && _privacyDirty() ? "Saving privacy…" : "Privacy changes are saved automatically.",
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
                   ),
                   if (_privacyLevel() != _PrivacyLevel.l1) ...[
                     const SizedBox(height: RecorderTokens.space1),
@@ -1427,10 +1496,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ],
                   const SizedBox(height: RecorderTokens.space4),
-                  FilledButton.icon(
-                    onPressed: _coreSettingsSaving ? null : _saveCoreSettings,
-                    icon: const Icon(Icons.save_outlined),
-                    label: _coreSettingsSaving ? const Text("Saving…") : const Text("Save"),
+                  Builder(
+                    builder: (context) {
+                      final dirtyBlock = (() {
+                        final s = _coreSettings;
+                        if (s == null) return false;
+                        final expectedBlock = _minsFromSeconds(s.blockSeconds).toString();
+                        final expectedIdle = _minsFromSeconds(s.idleCutoffSeconds).toString();
+                        return _blockMinutes.text.trim() != expectedBlock || _idleCutoffMinutes.text.trim() != expectedIdle;
+                      })();
+
+                      return FilledButton.icon(
+                        onPressed: (_coreSettingsSaving || !dirtyBlock) ? null : _saveCoreSettings,
+                        icon: const Icon(Icons.save_outlined),
+                        label: _coreSettingsSaving ? const Text("Saving…") : const Text("Save block/idle"),
+                      );
+                    },
                   ),
                 ],
               ],
