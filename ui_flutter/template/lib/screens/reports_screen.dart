@@ -5,6 +5,7 @@ import "package:flutter/services.dart";
 
 import "../api/core_client.dart";
 import "../theme/tokens.dart";
+import "../utils/desktop_agent.dart";
 
 enum _ReportKindFilter { daily, weekly }
 
@@ -63,6 +64,8 @@ class ReportsScreenState extends State<ReportsScreen> {
 
   Timer? _autoRetryTimer;
   int _autoRetryAttempts = 0;
+
+  bool _agentBusy = false;
 
   @override
   void initState() {
@@ -130,6 +133,35 @@ class ReportsScreenState extends State<ReportsScreen> {
     if (uri == null) return false;
     final host = uri.host.trim().toLowerCase();
     return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+  }
+
+  Future<void> _restartAgent() async {
+    final agent = DesktopAgent.instance;
+    if (!agent.isAvailable) return;
+    if (!_serverLooksLikeLocalhost()) return;
+    if (!mounted) return;
+    setState(() => _agentBusy = true);
+    try {
+      final res = await agent.start(
+        coreUrl: widget.serverUrl,
+        restart: true,
+        // Collector can always send titles; Core decides whether to store them via Privacy.
+        sendTitle: true,
+      );
+      if (!mounted) return;
+      final msg = res.ok ? "Agent restarted" : "Agent restart failed";
+      final details = (res.message ?? "").trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          showCloseIcon: true,
+          content: Text(details.isEmpty ? msg : "$msg: $details"),
+        ),
+      );
+      await refresh(silent: true);
+    } finally {
+      if (mounted) setState(() => _agentBusy = false);
+    }
   }
 
   int _tzOffsetMinutesForDay(DateTime d) {
@@ -890,6 +922,8 @@ class ReportsScreenState extends State<ReportsScreen> {
     if (_error != null) {
       final msg = _error ?? "";
       final auto = _serverLooksLikeLocalhost() && _isTransientError(msg);
+      final is404 = msg.contains("http_404");
+      final canRestartAgent = _serverLooksLikeLocalhost() && DesktopAgent.instance.isAvailable;
       return Padding(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         child: Column(
@@ -900,6 +934,12 @@ class ReportsScreenState extends State<ReportsScreen> {
             Text("Server URL: ${widget.serverUrl}", style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: RecorderTokens.space2),
             Text("Error: $msg", style: Theme.of(context).textTheme.labelMedium),
+            if (is404) ...[
+              const SizedBox(height: RecorderTokens.space2),
+              const Text(
+                "Tip: this server does not implement Reports endpoints yet. Update/restart recorder_core (or restart the desktop agent).",
+              ),
+            ],
             if (auto) ...[
               const SizedBox(height: RecorderTokens.space2),
               Row(
@@ -915,10 +955,22 @@ class ReportsScreenState extends State<ReportsScreen> {
               ),
             ],
             const SizedBox(height: RecorderTokens.space4),
-            FilledButton.icon(
-              onPressed: refresh,
-              icon: const Icon(Icons.refresh),
-              label: const Text("Retry"),
+            Wrap(
+              spacing: RecorderTokens.space2,
+              runSpacing: RecorderTokens.space2,
+              children: [
+                FilledButton.icon(
+                  onPressed: refresh,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text("Retry"),
+                ),
+                if (canRestartAgent)
+                  OutlinedButton.icon(
+                    onPressed: _agentBusy ? null : _restartAgent,
+                    icon: const Icon(Icons.restart_alt),
+                    label: Text(_agentBusy ? "Restarting…" : "Restart agent"),
+                  ),
+              ],
             ),
           ],
         ),
