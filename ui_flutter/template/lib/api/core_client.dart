@@ -24,6 +24,40 @@ class CoreClient {
     return res.statusCode == 200;
   }
 
+  /// Polls `/health` until it returns 200 or timeout.
+  ///
+  /// This is mainly used for "packaged desktop" flows where Core is started
+  /// in the background and the UI may navigate before the server is ready.
+  Future<bool> waitUntilHealthy({
+    Duration timeout = const Duration(seconds: 6),
+    Duration requestTimeout = const Duration(milliseconds: 900),
+    Duration initialDelay = const Duration(milliseconds: 200),
+    Duration maxDelay = const Duration(seconds: 2),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    var delay = initialDelay;
+
+    while (true) {
+      try {
+        final ok = await health().timeout(requestTimeout);
+        if (ok) return true;
+      } catch (_) {
+        // ignore and retry
+      }
+
+      if (DateTime.now().isAfter(deadline)) return false;
+      await Future<void>.delayed(delay);
+
+      final nextMs = (delay.inMilliseconds * 1.6).round();
+      delay = Duration(
+        milliseconds: nextMs.clamp(
+          initialDelay.inMilliseconds,
+          maxDelay.inMilliseconds,
+        ),
+      );
+    }
+  }
+
   Future<HealthInfo> healthInfo() async {
     final res = await http.get(_u("/health"));
     if (res.statusCode != 200) {
@@ -46,6 +80,20 @@ class CoreClient {
     final obj = jsonDecode(res.body) as Map<String, dynamic>;
     final data = (obj["data"] as List<dynamic>? ?? const []);
     return data.map((e) => BlockSummary.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<BlockSummary?> blocksDue({required String date, required int tzOffsetMinutes}) async {
+    final res = await http.get(
+      _u("/blocks/due", {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
+    );
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = obj["data"];
+    if (data == null) return null;
+    if (data is! Map<String, dynamic>) throw Exception("invalid_response");
+    return BlockSummary.fromJson(data);
   }
 
   Future<List<TimelineSegment>> timelineDay({required String date, required int tzOffsetMinutes}) async {
@@ -148,6 +196,10 @@ class CoreClient {
     int? idleCutoffSeconds,
     bool? storeTitles,
     bool? storeExePath,
+    int? reviewMinSeconds,
+    int? reviewNotifyRepeatMinutes,
+    bool? reviewNotifyWhenPaused,
+    bool? reviewNotifyWhenIdle,
   }) async {
     final body = <String, dynamic>{};
     if (blockSeconds != null) body["block_seconds"] = blockSeconds;
@@ -155,6 +207,16 @@ class CoreClient {
     // Privacy-level toggles (Core controls what is persisted even if collectors send more fields).
     if (storeTitles != null) body["store_titles"] = storeTitles;
     if (storeExePath != null) body["store_exe_path"] = storeExePath;
+    if (reviewMinSeconds != null) body["review_min_seconds"] = reviewMinSeconds;
+    if (reviewNotifyRepeatMinutes != null) {
+      body["review_notify_repeat_minutes"] = reviewNotifyRepeatMinutes;
+    }
+    if (reviewNotifyWhenPaused != null) {
+      body["review_notify_when_paused"] = reviewNotifyWhenPaused;
+    }
+    if (reviewNotifyWhenIdle != null) {
+      body["review_notify_when_idle"] = reviewNotifyWhenIdle;
+    }
 
     final res = await http.post(
       _u("/settings"),
@@ -265,6 +327,159 @@ class CoreClient {
       throw Exception("http_${res.statusCode}");
     }
     return res.body;
+  }
+
+  Future<List<ReportSummary>> reports({int limit = 50}) async {
+    final res = await http.get(_u("/reports", {"limit": limit.toString()}));
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = (obj["data"] as List<dynamic>? ?? const []);
+    return data.map((e) => ReportSummary.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<ReportSettings> reportSettings() async {
+    final res = await http.get(_u("/reports/settings"));
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = (obj["data"] as Map<String, dynamic>?);
+    if (data == null) throw Exception("invalid_response");
+    return ReportSettings.fromJson(data);
+  }
+
+  Future<ReportSettings> updateReportSettings({
+    bool? enabled,
+    String? apiBaseUrl,
+    String? apiKey,
+    String? model,
+    bool? dailyEnabled,
+    int? dailyAtMinutes,
+    String? dailyPrompt,
+    bool? weeklyEnabled,
+    int? weeklyWeekday,
+    int? weeklyAtMinutes,
+    String? weeklyPrompt,
+    bool? saveMd,
+    bool? saveCsv,
+    String? outputDir,
+  }) async {
+    final body = <String, dynamic>{};
+    if (enabled != null) body["enabled"] = enabled;
+    if (apiBaseUrl != null) body["api_base_url"] = apiBaseUrl;
+    if (apiKey != null) body["api_key"] = apiKey;
+    if (model != null) body["model"] = model;
+    if (dailyEnabled != null) body["daily_enabled"] = dailyEnabled;
+    if (dailyAtMinutes != null) body["daily_at_minutes"] = dailyAtMinutes;
+    if (dailyPrompt != null) body["daily_prompt"] = dailyPrompt;
+    if (weeklyEnabled != null) body["weekly_enabled"] = weeklyEnabled;
+    if (weeklyWeekday != null) body["weekly_weekday"] = weeklyWeekday;
+    if (weeklyAtMinutes != null) body["weekly_at_minutes"] = weeklyAtMinutes;
+    if (weeklyPrompt != null) body["weekly_prompt"] = weeklyPrompt;
+    if (saveMd != null) body["save_md"] = saveMd;
+    if (saveCsv != null) body["save_csv"] = saveCsv;
+    if (outputDir != null) body["output_dir"] = outputDir;
+
+    final res = await http.post(
+      _u("/reports/settings"),
+      headers: {"content-type": "application/json"},
+      body: jsonEncode(body),
+    );
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = (obj["data"] as Map<String, dynamic>?);
+    if (data == null) throw Exception("invalid_response");
+    return ReportSettings.fromJson(data);
+  }
+
+  Future<ReportRecord> generateDailyReport({
+    String? date,
+    int? tzOffsetMinutes,
+    bool force = false,
+  }) async {
+    final body = <String, dynamic>{
+      "force": force,
+    };
+    if (date != null) body["date"] = date;
+    if (tzOffsetMinutes != null) body["tz_offset_minutes"] = tzOffsetMinutes;
+
+    final res = await http.post(
+      _u("/reports/generate/daily"),
+      headers: {"content-type": "application/json"},
+      body: jsonEncode(body),
+    );
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = (obj["data"] as Map<String, dynamic>?);
+    if (data == null) throw Exception("invalid_response");
+    return ReportRecord.fromJson(data);
+  }
+
+  Future<ReportRecord> generateWeeklyReport({
+    String? weekStart,
+    int? tzOffsetMinutes,
+    bool force = false,
+  }) async {
+    final body = <String, dynamic>{
+      "force": force,
+    };
+    if (weekStart != null) body["week_start"] = weekStart;
+    if (tzOffsetMinutes != null) body["tz_offset_minutes"] = tzOffsetMinutes;
+
+    final res = await http.post(
+      _u("/reports/generate/weekly"),
+      headers: {"content-type": "application/json"},
+      body: jsonEncode(body),
+    );
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = (obj["data"] as Map<String, dynamic>?);
+    if (data == null) throw Exception("invalid_response");
+    return ReportRecord.fromJson(data);
+  }
+
+  Future<ReportRecord> reportById(String id) async {
+    final rid = id.trim();
+    final res = await http.get(_u("/reports/$rid"));
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = (obj["data"] as Map<String, dynamic>?);
+    if (data == null) throw Exception("invalid_response");
+    return ReportRecord.fromJson(data);
+  }
+
+  Future<ReportRecord> upsertReport(ReportUpsert r) async {
+    final res = await http.post(
+      _u("/reports"),
+      headers: {"content-type": "application/json"},
+      body: jsonEncode(r.toJson()),
+    );
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = (obj["data"] as Map<String, dynamic>?);
+    if (data == null) throw Exception("invalid_response");
+    return ReportRecord.fromJson(data);
+  }
+
+  Future<void> deleteReport(String id) async {
+    final rid = id.trim();
+    if (rid.isEmpty) return;
+    final res = await http.delete(_u("/reports/$rid"));
+    if (res.statusCode != 200) {
+      throw Exception("http_${res.statusCode}");
+    }
   }
 }
 
@@ -580,12 +795,20 @@ class CoreSettings {
     required this.idleCutoffSeconds,
     required this.storeTitles,
     required this.storeExePath,
+    required this.reviewMinSeconds,
+    required this.reviewNotifyRepeatMinutes,
+    required this.reviewNotifyWhenPaused,
+    required this.reviewNotifyWhenIdle,
   });
 
   final int blockSeconds;
   final int idleCutoffSeconds;
   final bool storeTitles;
   final bool storeExePath;
+  final int reviewMinSeconds;
+  final int reviewNotifyRepeatMinutes;
+  final bool reviewNotifyWhenPaused;
+  final bool reviewNotifyWhenIdle;
 
   factory CoreSettings.fromJson(Map<String, dynamic> json) {
     return CoreSettings(
@@ -593,6 +816,13 @@ class CoreSettings {
       idleCutoffSeconds: (json["idle_cutoff_seconds"] as int?) ?? (5 * 60),
       storeTitles: (json["store_titles"] as bool?) ?? false,
       storeExePath: (json["store_exe_path"] as bool?) ?? false,
+      reviewMinSeconds: (json["review_min_seconds"] as int?) ?? (5 * 60),
+      reviewNotifyRepeatMinutes:
+          (json["review_notify_repeat_minutes"] as int?) ?? 10,
+      reviewNotifyWhenPaused:
+          (json["review_notify_when_paused"] as bool?) ?? false,
+      reviewNotifyWhenIdle:
+          (json["review_notify_when_idle"] as bool?) ?? false,
     );
   }
 }
@@ -628,6 +858,7 @@ class DeleteDayResult {
     required this.endTs,
     required this.eventsDeleted,
     required this.reviewsDeleted,
+    required this.reportsDeleted,
   });
 
   final String date;
@@ -636,6 +867,7 @@ class DeleteDayResult {
   final String endTs;
   final int eventsDeleted;
   final int reviewsDeleted;
+  final int reportsDeleted;
 
   factory DeleteDayResult.fromJson(Map<String, dynamic> json) {
     return DeleteDayResult(
@@ -645,6 +877,7 @@ class DeleteDayResult {
       endTs: (json["end_ts"] as String?) ?? "",
       eventsDeleted: (json["events_deleted"] as int?) ?? 0,
       reviewsDeleted: (json["reviews_deleted"] as int?) ?? 0,
+      reportsDeleted: (json["reports_deleted"] as int?) ?? 0,
     );
   }
 }
@@ -653,15 +886,18 @@ class WipeAllResult {
   WipeAllResult({
     required this.eventsDeleted,
     required this.reviewsDeleted,
+    required this.reportsDeleted,
   });
 
   final int eventsDeleted;
   final int reviewsDeleted;
+  final int reportsDeleted;
 
   factory WipeAllResult.fromJson(Map<String, dynamic> json) {
     return WipeAllResult(
       eventsDeleted: (json["events_deleted"] as int?) ?? 0,
       reviewsDeleted: (json["reviews_deleted"] as int?) ?? 0,
+      reportsDeleted: (json["reports_deleted"] as int?) ?? 0,
     );
   }
 }
@@ -708,4 +944,208 @@ class PrivacyRuleUpsert {
         "value": value,
         "action": action,
       };
+}
+
+class ReportSummary {
+  ReportSummary({
+    required this.id,
+    required this.kind,
+    required this.periodStart,
+    required this.periodEnd,
+    required this.generatedAt,
+    required this.providerUrl,
+    required this.model,
+    required this.hasOutput,
+    required this.hasError,
+  });
+
+  final String id;
+  final String kind; // "daily" | "weekly"
+  final String periodStart; // YYYY-MM-DD
+  final String periodEnd; // YYYY-MM-DD
+  final String generatedAt; // RFC3339
+  final String? providerUrl;
+  final String? model;
+  final bool hasOutput;
+  final bool hasError;
+
+  factory ReportSummary.fromJson(Map<String, dynamic> json) {
+    return ReportSummary(
+      id: (json["id"] as String?) ?? "",
+      kind: (json["kind"] as String?) ?? "",
+      periodStart: (json["period_start"] as String?) ?? "",
+      periodEnd: (json["period_end"] as String?) ?? "",
+      generatedAt: (json["generated_at"] as String?) ?? "",
+      providerUrl: json["provider_url"] as String?,
+      model: json["model"] as String?,
+      hasOutput: (json["has_output"] as bool?) ?? false,
+      hasError: (json["has_error"] as bool?) ?? false,
+    );
+  }
+}
+
+class ReportRecord {
+  ReportRecord({
+    required this.id,
+    required this.kind,
+    required this.periodStart,
+    required this.periodEnd,
+    required this.generatedAt,
+    required this.providerUrl,
+    required this.model,
+    required this.prompt,
+    required this.inputJson,
+    required this.outputMd,
+    required this.error,
+  });
+
+  final String id;
+  final String kind;
+  final String periodStart;
+  final String periodEnd;
+  final String generatedAt;
+  final String? providerUrl;
+  final String? model;
+  final String? prompt;
+  final String? inputJson;
+  final String? outputMd;
+  final String? error;
+
+  factory ReportRecord.fromJson(Map<String, dynamic> json) {
+    return ReportRecord(
+      id: (json["id"] as String?) ?? "",
+      kind: (json["kind"] as String?) ?? "",
+      periodStart: (json["period_start"] as String?) ?? "",
+      periodEnd: (json["period_end"] as String?) ?? "",
+      generatedAt: (json["generated_at"] as String?) ?? "",
+      providerUrl: json["provider_url"] as String?,
+      model: json["model"] as String?,
+      prompt: json["prompt"] as String?,
+      inputJson: json["input_json"] as String?,
+      outputMd: json["output_md"] as String?,
+      error: json["error"] as String?,
+    );
+  }
+}
+
+class ReportUpsert {
+  ReportUpsert({
+    required this.id,
+    required this.kind,
+    required this.periodStart,
+    required this.periodEnd,
+    this.generatedAt,
+    this.providerUrl,
+    this.model,
+    this.prompt,
+    this.inputJson,
+    this.outputMd,
+    this.error,
+  });
+
+  final String id;
+  final String kind;
+  final String periodStart;
+  final String periodEnd;
+  final String? generatedAt;
+  final String? providerUrl;
+  final String? model;
+  final String? prompt;
+  final String? inputJson;
+  final String? outputMd;
+  final String? error;
+
+  Map<String, dynamic> toJson() {
+    return {
+      "id": id,
+      "kind": kind,
+      "period_start": periodStart,
+      "period_end": periodEnd,
+      "generated_at": generatedAt,
+      "provider_url": providerUrl,
+      "model": model,
+      "prompt": prompt,
+      "input_json": inputJson,
+      "output_md": outputMd,
+      "error": error,
+    };
+  }
+}
+
+class ReportSettings {
+  ReportSettings({
+    required this.enabled,
+    required this.apiBaseUrl,
+    required this.apiKey,
+    required this.model,
+    required this.dailyEnabled,
+    required this.dailyAtMinutes,
+    required this.dailyPrompt,
+    required this.weeklyEnabled,
+    required this.weeklyWeekday,
+    required this.weeklyAtMinutes,
+    required this.weeklyPrompt,
+    required this.saveMd,
+    required this.saveCsv,
+    required this.outputDir,
+    required this.effectiveOutputDir,
+    required this.defaultDailyPrompt,
+    required this.defaultWeeklyPrompt,
+    required this.updatedAt,
+  });
+
+  final bool enabled;
+  final String apiBaseUrl;
+  final String apiKey;
+  final String model;
+  final bool dailyEnabled;
+  final int dailyAtMinutes;
+  final String dailyPrompt;
+  final bool weeklyEnabled;
+  final int weeklyWeekday; // 1=Mon..7=Sun
+  final int weeklyAtMinutes;
+  final String weeklyPrompt;
+  final bool saveMd;
+  final bool saveCsv;
+  final String? outputDir;
+  final String? effectiveOutputDir;
+  final String? defaultDailyPrompt;
+  final String? defaultWeeklyPrompt;
+  final String updatedAt;
+
+  bool get isConfigured {
+    if (!enabled) return false;
+    if (apiBaseUrl.trim().isEmpty) return false;
+    if (apiKey.trim().isEmpty) return false;
+    if (model.trim().isEmpty) return false;
+    final uri = Uri.tryParse(apiBaseUrl.trim());
+    if (uri == null) return false;
+    if (!uri.hasScheme) return false;
+    if (uri.scheme != "http" && uri.scheme != "https") return false;
+    if (uri.host.trim().isEmpty) return false;
+    return true;
+  }
+
+  factory ReportSettings.fromJson(Map<String, dynamic> json) {
+    return ReportSettings(
+      enabled: (json["enabled"] as bool?) ?? false,
+      apiBaseUrl: (json["api_base_url"] as String?) ?? "",
+      apiKey: (json["api_key"] as String?) ?? "",
+      model: (json["model"] as String?) ?? "",
+      dailyEnabled: (json["daily_enabled"] as bool?) ?? false,
+      dailyAtMinutes: (json["daily_at_minutes"] as num?)?.toInt() ?? 0,
+      dailyPrompt: (json["daily_prompt"] as String?) ?? "",
+      weeklyEnabled: (json["weekly_enabled"] as bool?) ?? false,
+      weeklyWeekday: (json["weekly_weekday"] as num?)?.toInt() ?? 1,
+      weeklyAtMinutes: (json["weekly_at_minutes"] as num?)?.toInt() ?? 0,
+      weeklyPrompt: (json["weekly_prompt"] as String?) ?? "",
+      saveMd: (json["save_md"] as bool?) ?? true,
+      saveCsv: (json["save_csv"] as bool?) ?? false,
+      outputDir: json["output_dir"] as String?,
+      effectiveOutputDir: json["effective_output_dir"] as String?,
+      defaultDailyPrompt: json["default_daily_prompt"] as String?,
+      defaultWeeklyPrompt: json["default_weekly_prompt"] as String?,
+      updatedAt: (json["updated_at"] as String?) ?? "",
+    );
+  }
 }

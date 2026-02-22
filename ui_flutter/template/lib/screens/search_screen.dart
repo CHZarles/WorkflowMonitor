@@ -10,10 +10,12 @@ import "../widgets/block_detail_sheet.dart";
 import "../widgets/quick_review_sheet.dart";
 
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({super.key, required this.client, required this.serverUrl});
+  const SearchScreen(
+      {super.key, required this.client, required this.serverUrl, this.isActive = false});
 
   final CoreClient client;
   final String serverUrl;
+  final bool isActive;
 
   @override
   State<SearchScreen> createState() => SearchScreenState();
@@ -33,29 +35,56 @@ class SearchScreenState extends State<SearchScreen> {
   final Map<String, List<BlockCardItem>> _previewFocusByBlockId = {};
   final Map<String, BlockCardItem> _previewAudioTopByBlockId = {};
 
+  Timer? _autoRetryTimer;
+  int _autoRetryAttempts = 0;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    if (widget.isActive) {
+      _load();
+    } else {
+      _loading = false;
+    }
   }
 
   @override
   void didUpdateWidget(covariant SearchScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.serverUrl != widget.serverUrl) {
+      _autoRetryTimer?.cancel();
+      _autoRetryTimer = null;
+      _autoRetryAttempts = 0;
+      if (widget.isActive) {
+        _load();
+      } else if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = null;
+          _blocks = const [];
+          _previewFocusByBlockId.clear();
+          _previewAudioTopByBlockId.clear();
+        });
+      }
+      return;
+    }
+    if (!oldWidget.isActive && widget.isActive) {
       _load();
     }
   }
 
   @override
   void dispose() {
+    _autoRetryTimer?.cancel();
     _queryController.dispose();
     super.dispose();
   }
 
   Future<void> setDay(DateTime day, {bool refresh = true}) async {
     final next = DateTime(day.year, day.month, day.day);
-    if (_day.year == next.year && _day.month == next.month && _day.day == next.day) {
+    if (_day.year == next.year &&
+        _day.month == next.month &&
+        _day.day == next.day) {
       if (refresh) await _load(silent: true);
       return;
     }
@@ -81,7 +110,10 @@ class SearchScreenState extends State<SearchScreen> {
     final doing = (r.doing ?? "").trim();
     final output = (r.output ?? "").trim();
     final next = (r.next ?? "").trim();
-    return doing.isNotEmpty || output.isNotEmpty || next.isNotEmpty || r.tags.isNotEmpty;
+    return doing.isNotEmpty ||
+        output.isNotEmpty ||
+        next.isNotEmpty ||
+        r.tags.isNotEmpty;
   }
 
   String _dateLocal(DateTime d) {
@@ -91,22 +123,43 @@ class SearchScreenState extends State<SearchScreen> {
     return "$y-$m-$dd";
   }
 
-  Future<void> refresh({bool silent = false}) async => _load(silent: silent);
+  bool _serverLooksLikeLocalhost() {
+    final uri = Uri.tryParse(widget.serverUrl.trim());
+    if (uri == null) return false;
+    final host = uri.host.trim().toLowerCase();
+    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+  }
+
+  Future<void> refresh({bool silent = false}) async {
+    if (_refreshing) {
+      await (_loadCompleter?.future ?? Future.value());
+    }
+    await _load(silent: silent);
+  }
 
   Future<void> _load({bool silent = false}) async {
+    if (!widget.isActive && !silent) return;
     if (_refreshing) return;
     _refreshing = true;
     _loadCompleter = Completer<void>();
-    if (!silent) {
+    final showLoadingUi = !silent || _error != null;
+    if (showLoadingUi) {
       setState(() {
         _loading = true;
         _error = null;
       });
     }
     try {
-      if (!silent) {
-        final ok = await widget.client.health();
-        if (!ok) throw Exception("health_failed");
+      final ok = await widget.client.waitUntilHealthy(
+        timeout: showLoadingUi
+            ? (_serverLooksLikeLocalhost()
+                ? const Duration(seconds: 15)
+                : const Duration(seconds: 6))
+            : const Duration(milliseconds: 900),
+      );
+      if (!ok) {
+        if (showLoadingUi) throw Exception("health_failed");
+        return;
       }
 
       final tzOffsetMinutes = DateTime.now().timeZoneOffset.inMinutes;
@@ -117,13 +170,15 @@ class SearchScreenState extends State<SearchScreen> {
         date: _dateLocal(_day),
         tzOffsetMinutes: tzOffsetMinutes,
       );
-      final segsFuture = widget.client.timelineDay(date: date, tzOffsetMinutes: tzOffsetMinutes);
+      final segsFuture = widget.client
+          .timelineDay(date: date, tzOffsetMinutes: tzOffsetMinutes);
 
       final settings = await settingsFuture;
       final blocks = await blocksFuture;
       final segs = await segsFuture;
 
-      final previews = _buildPreviews(blocks: blocks, segments: segs, storeTitles: settings.storeTitles);
+      final previews = _buildPreviews(
+          blocks: blocks, segments: segs, storeTitles: settings.storeTitles);
       if (!mounted) return;
       setState(() {
         _blocks = blocks;
@@ -133,14 +188,18 @@ class SearchScreenState extends State<SearchScreen> {
         _previewAudioTopByBlockId
           ..clear()
           ..addAll(previews.audioTop);
+        _error = null;
       });
+      _autoRetryAttempts = 0;
     } catch (e) {
       if (!mounted) return;
-      if (!silent) {
-        setState(() => _error = e.toString());
+      if (showLoadingUi) {
+        final msg = e.toString();
+        setState(() => _error = msg);
+        _scheduleAutoRetryIfNeeded(msg);
       }
     } finally {
-      if (!silent && mounted) {
+      if (showLoadingUi && mounted) {
         setState(() => _loading = false);
       }
       _refreshing = false;
@@ -149,17 +208,52 @@ class SearchScreenState extends State<SearchScreen> {
     }
   }
 
-  ({Map<String, List<BlockCardItem>> focus, Map<String, BlockCardItem> audioTop}) _buildPreviews({
+  bool _isTransientError(String msg) {
+    final s = msg.toLowerCase();
+    if (s.contains("health_failed")) return true;
+    if (s.contains("connection") || s.contains("socket")) return true;
+    if (s.contains("refused") || s.contains("timed out") || s.contains("timeout")) return true;
+    if (s.contains("http_502") || s.contains("http_503") || s.contains("http_504")) return true;
+    return false;
+  }
+
+  void _scheduleAutoRetryIfNeeded(String msg) {
+    if (!mounted) return;
+    if (_autoRetryTimer != null) return;
+    if (!_serverLooksLikeLocalhost()) return;
+    if (!_isTransientError(msg)) return;
+    if (_autoRetryAttempts >= 8) return;
+
+    final backoffMs = (350 * (1 << _autoRetryAttempts)).clamp(350, 5000);
+    _autoRetryAttempts += 1;
+    _autoRetryTimer = Timer(Duration(milliseconds: backoffMs), () {
+      _autoRetryTimer = null;
+      if (!mounted) return;
+      _load(silent: true);
+    });
+  }
+
+  ({
+    Map<String, List<BlockCardItem>> focus,
+    Map<String, BlockCardItem> audioTop
+  }) _buildPreviews({
     required List<BlockSummary> blocks,
     required List<TimelineSegment> segments,
     required bool storeTitles,
   }) {
     bool isBrowserLabel(String label) {
       final v = label.toLowerCase();
-      return v == "chrome" || v == "msedge" || v == "edge" || v == "brave" || v == "vivaldi" || v == "opera" || v == "firefox";
+      return v == "chrome" ||
+          v == "msedge" ||
+          v == "edge" ||
+          v == "brave" ||
+          v == "vivaldi" ||
+          v == "opera" ||
+          v == "firefox";
     }
 
-    final parsedSegs = <({TimelineSegment s, DateTime startUtc, DateTime endUtc})>[];
+    final parsedSegs =
+        <({TimelineSegment s, DateTime startUtc, DateTime endUtc})>[];
     for (final s in segments) {
       try {
         final startUtc = DateTime.parse(s.startTs).toUtc();
@@ -199,9 +293,13 @@ class SearchScreenState extends State<SearchScreen> {
           final rawEntity = s.entity.trim();
           if (rawEntity.isEmpty) continue;
 
-          if (!seg.endUtc.isAfter(blockStartUtc) || !blockEndUtc.isAfter(seg.startUtc)) continue;
-          final overlapStart = seg.startUtc.isAfter(blockStartUtc) ? seg.startUtc : blockStartUtc;
-          final overlapEnd = seg.endUtc.isBefore(blockEndUtc) ? seg.endUtc : blockEndUtc;
+          if (!seg.endUtc.isAfter(blockStartUtc) ||
+              !blockEndUtc.isAfter(seg.startUtc)) continue;
+          final overlapStart = seg.startUtc.isAfter(blockStartUtc)
+              ? seg.startUtc
+              : blockStartUtc;
+          final overlapEnd =
+              seg.endUtc.isBefore(blockEndUtc) ? seg.endUtc : blockEndUtc;
           final seconds = overlapEnd.difference(overlapStart).inSeconds;
           if (seconds <= 0) continue;
 
@@ -213,7 +311,8 @@ class SearchScreenState extends State<SearchScreen> {
           if (s.kind == "domain") {
             final domain = rawEntity.toLowerCase();
             final rawTitle = (s.title ?? "").trim();
-            final normTitle = storeTitles ? normalizeWebTitle(domain, rawTitle) : "";
+            final normTitle =
+                storeTitles ? normalizeWebTitle(domain, rawTitle) : "";
             if (storeTitles && normTitle.isNotEmpty) {
               key = "domain|$domain|$normTitle";
               entity = domain;
@@ -230,8 +329,12 @@ class SearchScreenState extends State<SearchScreen> {
             final appLabel = displayEntity(appEntity);
             final labelLc = appLabel.toLowerCase();
             final title = (s.title ?? "").trim();
-            final isVscode = labelLc == "code" || labelLc == "vscode" || title.contains("Visual Studio Code");
-            final ws = (storeTitles && isVscode && title.isNotEmpty) ? extractVscodeWorkspace(title) : null;
+            final isVscode = labelLc == "code" ||
+                labelLc == "vscode" ||
+                title.contains("Visual Studio Code");
+            final ws = (storeTitles && isVscode && title.isNotEmpty)
+                ? extractVscodeWorkspace(title)
+                : null;
 
             if (ws != null && ws.trim().isNotEmpty) {
               final w = ws.trim();
@@ -245,7 +348,9 @@ class SearchScreenState extends State<SearchScreen> {
               label = appLabel;
               subtitle = null;
 
-              if (storeTitles && title.isNotEmpty && !isBrowserLabel(appLabel)) {
+              if (storeTitles &&
+                  title.isNotEmpty &&
+                  !isBrowserLabel(appLabel)) {
                 subtitle = title;
               }
             }
@@ -255,9 +360,10 @@ class SearchScreenState extends State<SearchScreen> {
           kindByKey[key] = s.kind;
           entityByKey[key] = entity;
           labelByKey[key] = label;
-          subtitleByKey[key] = (subtitleByKey[key] == null || subtitleByKey[key]!.trim().isEmpty)
-              ? subtitle
-              : subtitleByKey[key];
+          subtitleByKey[key] =
+              (subtitleByKey[key] == null || subtitleByKey[key]!.trim().isEmpty)
+                  ? subtitle
+                  : subtitleByKey[key];
         }
 
         final items = <BlockCardItem>[];
@@ -299,7 +405,9 @@ class SearchScreenState extends State<SearchScreen> {
     try {
       final local = DateTime.parse(id).toLocal();
       final nextDay = DateTime(local.year, local.month, local.day);
-      if (_day.year != nextDay.year || _day.month != nextDay.month || _day.day != nextDay.day) {
+      if (_day.year != nextDay.year ||
+          _day.month != nextDay.month ||
+          _day.day != nextDay.day) {
         setState(() => _day = nextDay);
       }
     } catch (_) {
@@ -346,7 +454,8 @@ class SearchScreenState extends State<SearchScreen> {
     final target = q.trim().toLowerCase();
     if (target.isEmpty) return true;
 
-    final timeRange = "${formatHHMM(b.startTs)}–${formatHHMM(b.endTs)}".toLowerCase();
+    final timeRange =
+        "${formatHHMM(b.startTs)}–${formatHHMM(b.endTs)}".toLowerCase();
     if (timeRange.contains(target)) return true;
 
     for (final it in b.topItems) {
@@ -376,7 +485,10 @@ class SearchScreenState extends State<SearchScreen> {
       final output = (r.output ?? "").toLowerCase();
       final next = (r.next ?? "").toLowerCase();
       final reason = (r.skipReason ?? "").toLowerCase();
-      if (doing.contains(target) || output.contains(target) || next.contains(target) || reason.contains(target)) {
+      if (doing.contains(target) ||
+          output.contains(target) ||
+          next.contains(target) ||
+          reason.contains(target)) {
         return true;
       }
       for (final t in r.tags) {
@@ -413,8 +525,9 @@ class SearchScreenState extends State<SearchScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) =>
-          quick ? QuickReviewSheet(client: widget.client, block: b) : BlockDetailSheet(client: widget.client, block: b),
+      builder: (_) => quick
+          ? QuickReviewSheet(client: widget.client, block: b)
+          : BlockDetailSheet(client: widget.client, block: b),
     );
     if (ok == true) {
       await _load(silent: true);
@@ -457,9 +570,12 @@ class SearchScreenState extends State<SearchScreen> {
       child: SegmentedButton<_BlockStatusFilter>(
         segments: const [
           ButtonSegment(value: _BlockStatusFilter.all, label: Text("All")),
-          ButtonSegment(value: _BlockStatusFilter.pending, label: Text("Pending")),
-          ButtonSegment(value: _BlockStatusFilter.reviewed, label: Text("Reviewed")),
-          ButtonSegment(value: _BlockStatusFilter.skipped, label: Text("Skipped")),
+          ButtonSegment(
+              value: _BlockStatusFilter.pending, label: Text("Pending")),
+          ButtonSegment(
+              value: _BlockStatusFilter.reviewed, label: Text("Reviewed")),
+          ButtonSegment(
+              value: _BlockStatusFilter.skipped, label: Text("Skipped")),
         ],
         selected: {_statusFilter},
         showSelectedIcon: false,
@@ -512,16 +628,35 @@ class SearchScreenState extends State<SearchScreen> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
+      final msg = _error ?? "";
+      final auto = _serverLooksLikeLocalhost() && _isTransientError(msg);
       return Padding(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Review unavailable", style: Theme.of(context).textTheme.titleMedium),
+            Text("Review unavailable",
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: RecorderTokens.space2),
-            Text("Server URL: ${widget.serverUrl}", style: Theme.of(context).textTheme.bodyMedium),
+            Text("Server URL: ${widget.serverUrl}",
+                style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: RecorderTokens.space2),
-            Text("Error: $_error", style: Theme.of(context).textTheme.labelMedium),
+            Text("Error: $msg",
+                style: Theme.of(context).textTheme.labelMedium),
+            if (auto) ...[
+              const SizedBox(height: RecorderTokens.space2),
+              Row(
+                children: [
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: RecorderTokens.space2),
+                  const Expanded(child: Text("Retrying automatically…")),
+                ],
+              ),
+            ],
             const SizedBox(height: RecorderTokens.space4),
             FilledButton.icon(
               onPressed: _load,
@@ -540,7 +675,8 @@ class SearchScreenState extends State<SearchScreen> {
       child: ListView.separated(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         itemCount: filtered.length + 1,
-        separatorBuilder: (_, __) => const SizedBox(height: RecorderTokens.space3),
+        separatorBuilder: (_, __) =>
+            const SizedBox(height: RecorderTokens.space3),
         itemBuilder: (context, i) {
           if (i == 0) {
             return _searchHeader(context, filtered.length, _blocks.length);

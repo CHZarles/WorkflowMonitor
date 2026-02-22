@@ -1,7 +1,9 @@
 import "dart:async";
 
 import "package:flutter/foundation.dart";
+import "package:flutter/gestures.dart";
 import "package:flutter/material.dart";
+import "package:flutter/services.dart";
 import "package:shared_preferences/shared_preferences.dart";
 
 import "../api/core_client.dart";
@@ -54,7 +56,10 @@ class _StatItem {
 }
 
 class _TopAgg {
-  const _TopAgg({required this.focusSeconds, required this.audioSeconds, required this.items});
+  const _TopAgg(
+      {required this.focusSeconds,
+      required this.audioSeconds,
+      required this.items});
 
   final int focusSeconds;
   final int audioSeconds;
@@ -120,6 +125,13 @@ class _FlowItem {
   final IconData icon;
 }
 
+class _TimelineViewState {
+  const _TimelineViewState({required this.zoom, required this.centerFrac});
+
+  final double zoom;
+  final double centerFrac;
+}
+
 class TodayScreenState extends State<TodayScreen> {
   static const _prefSnoozeUntilMs = "reviewSnoozeUntilMs";
   static const _prefSnoozeBlockId = "reviewSnoozeBlockId";
@@ -131,9 +143,10 @@ class TodayScreenState extends State<TodayScreen> {
 
   DateTime _day = DateTime.now();
 
-  int _blockSeconds = 45 * 60;
   bool _coreStoreTitles = false;
   bool _coreStoreExePath = false;
+  int _reviewMinSeconds = 5 * 60;
+  bool _reviewNotifyWhenPaused = false;
   bool _loading = true;
   String? _error;
   List<TimelineSegment> _segments = const [];
@@ -162,6 +175,7 @@ class TodayScreenState extends State<TodayScreen> {
   bool _timelineSortByTime = false;
   double _timelineZoom = 1.0;
   final ScrollController _timelineH = ScrollController();
+  _TimelineViewState? _timelineSavedView;
   DateTime? _nowUpdatedAt;
   DateTime? _blocksUpdatedAt;
   int? _lastAnyEventId;
@@ -186,7 +200,8 @@ class TodayScreenState extends State<TodayScreen> {
       if (!_viewingToday()) return;
       _refreshNow(silent: true, kickBlocksOnChange: true);
     });
-    _blocksTimer = Timer.periodic(const Duration(seconds: _blocksPollSeconds), (_) {
+    _blocksTimer =
+        Timer.periodic(const Duration(seconds: _blocksPollSeconds), (_) {
       if (!_viewingToday()) return;
       _refreshBlocks(silent: true, triggerReminder: true);
     });
@@ -211,13 +226,15 @@ class TodayScreenState extends State<TodayScreen> {
 
   DateTime _normalizeDay(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  bool _isSameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
 
   DateTime _todayDay() => _normalizeDay(DateTime.now());
 
   bool _viewingToday() => _isSameDay(_normalizeDay(_day), _todayDay());
 
-  bool _isAndroid() => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  bool _isAndroid() =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   bool _serverLooksLikeLocalhost() {
     final uri = Uri.tryParse(widget.serverUrl.trim());
@@ -237,7 +254,10 @@ class TodayScreenState extends State<TodayScreen> {
     final u = Uri.tryParse(widget.serverUrl.trim());
     if (u == null) return false;
     final host = u.host.trim().toLowerCase();
-    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+    return host == "127.0.0.1" ||
+        host == "localhost" ||
+        host == "0.0.0.0" ||
+        host == "::1";
   }
 
   Future<void> _startLocalAgent() async {
@@ -246,14 +266,17 @@ class TodayScreenState extends State<TodayScreen> {
     if (!_isLocalServerUrl()) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Agent can only start when Server URL is localhost.")),
+        const SnackBar(
+            content:
+                Text("Agent can only start when Server URL is localhost.")),
       );
       return;
     }
 
     setState(() => _agentBusy = true);
     try {
-      final res = await agent.start(coreUrl: widget.serverUrl, restart: false, sendTitle: false);
+      final res = await agent.start(
+          coreUrl: widget.serverUrl, restart: false, sendTitle: false);
       if (!mounted) return;
       final msg = res.ok ? "Agent started" : "Agent start failed";
       final details = (res.message ?? "").trim();
@@ -324,36 +347,10 @@ class TodayScreenState extends State<TodayScreen> {
     final doing = (r.doing ?? "").trim();
     final output = (r.output ?? "").trim();
     final next = (r.next ?? "").trim();
-    return doing.isNotEmpty || output.isNotEmpty || next.isNotEmpty || r.tags.isNotEmpty;
-  }
-
-  BlockSummary? _findDueBlock(List<BlockSummary> blocks) {
-    if (blocks.isEmpty) return null;
-    final now = DateTime.now();
-    const minSeconds = 5 * 60;
-    final fullBlockSeconds = _blockSeconds;
-
-    for (var i = blocks.length - 1; i >= 0; i--) {
-      final b = blocks[i];
-      if (b.totalSeconds < minSeconds) continue;
-      if (_isReviewed(b)) continue;
-
-      final hasNext = i < blocks.length - 1;
-      if (hasNext) return b;
-
-      if (b.totalSeconds >= fullBlockSeconds) return b;
-
-      // If the last block hasn't advanced for a bit, treat it as ended (idle cutoff).
-      try {
-        final end = DateTime.parse(b.endTs).toLocal();
-        if (now.difference(end) > const Duration(seconds: 30)) {
-          return b;
-        }
-      } catch (_) {
-        // ignore
-      }
-    }
-    return null;
+    return doing.isNotEmpty ||
+        output.isNotEmpty ||
+        next.isNotEmpty ||
+        r.tags.isNotEmpty;
   }
 
   Future<void> _loadReminderPrefs() async {
@@ -374,9 +371,10 @@ class TodayScreenState extends State<TodayScreen> {
       final s = await widget.client.settings();
       if (!mounted) return;
       setState(() {
-        _blockSeconds = s.blockSeconds;
         _coreStoreTitles = s.storeTitles;
         _coreStoreExePath = s.storeExePath;
+        _reviewMinSeconds = s.reviewMinSeconds;
+        _reviewNotifyWhenPaused = s.reviewNotifyWhenPaused;
       });
     } catch (_) {
       // best effort
@@ -559,7 +557,8 @@ class TodayScreenState extends State<TodayScreen> {
 
       if (kind == "domain") {
         final rawTitle = (s.title ?? "").trim();
-        final normTitle = _coreStoreTitles ? normalizeWebTitle(entity, rawTitle) : "";
+        final normTitle =
+            _coreStoreTitles ? normalizeWebTitle(entity, rawTitle) : "";
         if (_coreStoreTitles && normTitle.isNotEmpty) {
           key = "domain|$entity|$normTitle";
           label = normTitle;
@@ -597,7 +596,8 @@ class TodayScreenState extends State<TodayScreen> {
       );
     }
     items.sort((a, b) => b.seconds.compareTo(a.seconds));
-    return _TopAgg(focusSeconds: focusSeconds, audioSeconds: audioSeconds, items: items);
+    return _TopAgg(
+        focusSeconds: focusSeconds, audioSeconds: audioSeconds, items: items);
   }
 
   IconData _iconForAppLabel(String label) {
@@ -611,18 +611,40 @@ class TodayScreenState extends State<TodayScreen> {
         name.contains("firefox")) {
       return Icons.public;
     }
-    if (name.contains("explorer") || name == "files" || name.contains("finder")) return Icons.folder_outlined;
-    if (name.contains("powershell") || name == "pwsh" || name == "cmd" || name.contains("terminal")) return Icons.terminal;
-    if (name.contains("qqmusic") || name.contains("music") || name.contains("spotify")) return Icons.music_note_outlined;
-    if (name.contains("wechat") || name.contains("weixin") || name == "qq" || name.contains("telegram")) return Icons.chat_bubble_outline;
-    if (name.contains("slack") || name.contains("discord") || name.contains("teams") || name.contains("telegram")) {
+    if (name.contains("explorer") || name == "files" || name.contains("finder"))
+      return Icons.folder_outlined;
+    if (name.contains("powershell") ||
+        name == "pwsh" ||
+        name == "cmd" ||
+        name.contains("terminal")) return Icons.terminal;
+    if (name.contains("qqmusic") ||
+        name.contains("music") ||
+        name.contains("spotify")) return Icons.music_note_outlined;
+    if (name.contains("wechat") ||
+        name.contains("weixin") ||
+        name == "qq" ||
+        name.contains("telegram")) return Icons.chat_bubble_outline;
+    if (name.contains("slack") ||
+        name.contains("discord") ||
+        name.contains("teams") ||
+        name.contains("telegram")) {
       return Icons.chat_bubble_outline;
     }
-    if (name.contains("zoom") || name.contains("meet") || name.contains("webex")) return Icons.video_call_outlined;
-    if (name.contains("figma") || name.contains("sketch") || name.contains("xd")) return Icons.design_services_outlined;
-    if (name.contains("notion") || name.contains("obsidian") || name.contains("notes")) return Icons.note_alt_outlined;
-    if (name.contains("excel") || name.contains("word") || name.contains("powerpoint")) return Icons.description_outlined;
-    if (name.contains("steam") || name.contains("epic") || name.contains("battle.net")) return Icons.sports_esports_outlined;
+    if (name.contains("zoom") ||
+        name.contains("meet") ||
+        name.contains("webex")) return Icons.video_call_outlined;
+    if (name.contains("figma") ||
+        name.contains("sketch") ||
+        name.contains("xd")) return Icons.design_services_outlined;
+    if (name.contains("notion") ||
+        name.contains("obsidian") ||
+        name.contains("notes")) return Icons.note_alt_outlined;
+    if (name.contains("excel") ||
+        name.contains("word") ||
+        name.contains("powerpoint")) return Icons.description_outlined;
+    if (name.contains("steam") ||
+        name.contains("epic") ||
+        name.contains("battle.net")) return Icons.sports_esports_outlined;
     return Icons.apps;
   }
 
@@ -654,7 +676,8 @@ class TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  Future<void> _setSnooze({required String blockId, required Duration duration}) async {
+  Future<void> _setSnooze(
+      {required String blockId, required Duration duration}) async {
     final until = DateTime.now().add(duration).millisecondsSinceEpoch;
     _snoozeUntilMs = until;
     _snoozeBlockId = blockId;
@@ -698,7 +721,8 @@ class TodayScreenState extends State<TodayScreen> {
       await refresh(silent: true, triggerReminder: false);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Action failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Action failed: $e")));
     }
   }
 
@@ -768,17 +792,31 @@ class TodayScreenState extends State<TodayScreen> {
       if (DateTime.now().millisecondsSinceEpoch < snoozeUntil) return;
     }
 
+    if (!_reviewNotifyWhenPaused) {
+      try {
+        final status = await widget.client.trackingStatus();
+        if (status.paused) return;
+      } catch (_) {
+        // best effort: if tracking status can't be loaded, keep current behavior.
+      }
+    }
+
     _promptShowing = true;
     try {
       final top = _blockTopLine(b);
       final title = "${formatHHMM(b.startTs)}–${formatHHMM(b.endTs)}";
+      final minMin = (_reviewMinSeconds / 60).ceil().clamp(1, 9999);
 
       final action = await showDialog<String>(
         context: context,
         barrierDismissible: true,
         builder: (ctx) => AlertDialog(
           title: const Text("Time to review"),
-          content: Text("$title\n\nTop: $top"),
+          content: Text(
+            "$title\n\nTop: $top\n\n"
+            "Why now: latest ended block (≥ ${minMin}m) is still pending.\n"
+            "You can tune this in Settings → Review reminders.",
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, "skip"),
@@ -810,12 +848,16 @@ class TodayScreenState extends State<TodayScreen> {
           await widget.client.pauseTracking(minutes: 15);
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(duration: Duration(seconds: 4), showCloseIcon: true, content: Text("Paused 15m")),
+            const SnackBar(
+                duration: Duration(seconds: 4),
+                showCloseIcon: true,
+                content: Text("Paused 15m")),
           );
           await refresh(silent: true, triggerReminder: false);
         } catch (e) {
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Pause failed: $e")));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text("Pause failed: $e")));
         }
       } else {
         // Treat dismiss as snooze to avoid nagging.
@@ -826,7 +868,8 @@ class TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  Future<void> _refreshNow({bool silent = false, bool kickBlocksOnChange = false}) async {
+  Future<void> _refreshNow(
+      {bool silent = false, bool kickBlocksOnChange = false}) async {
     if (_refreshingNow) return;
     _refreshingNow = true;
     try {
@@ -854,7 +897,8 @@ class TodayScreenState extends State<TodayScreen> {
           !_refreshingBlocks &&
           _blocksUpdatedAt != null &&
           (_lastAutoBlocksRefreshAt == null ||
-              now.difference(_lastAutoBlocksRefreshAt!) > const Duration(seconds: 10));
+              now.difference(_lastAutoBlocksRefreshAt!) >
+                  const Duration(seconds: 10));
       setState(() {
         _nowFocusTtlSeconds = focusTtlSeconds;
         _nowAudioTtlSeconds = audioTtlSeconds;
@@ -886,7 +930,8 @@ class TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  Future<void> _refreshBlocks({bool silent = false, bool triggerReminder = false}) async {
+  Future<void> _refreshBlocks(
+      {bool silent = false, bool triggerReminder = false}) async {
     if (_refreshingBlocks) return;
     _refreshingBlocks = true;
     if (!silent) {
@@ -899,20 +944,31 @@ class TodayScreenState extends State<TodayScreen> {
       await _loadCoreSettings();
 
       if (!silent) {
-        final ok = await widget.client.health();
+        final ok = await widget.client.waitUntilHealthy(
+          timeout: _serverLooksLikeLocalhost()
+              ? const Duration(seconds: 15)
+              : const Duration(seconds: 6),
+        );
         if (!ok) throw Exception("health_failed");
       }
 
       final date = _dateLocal(_day);
       final tzOffsetMinutes = _tzOffsetMinutesForDay(_day);
+      final viewingToday = _viewingToday();
 
-      final blocks = await widget.client.blocksToday(
+      final blocksFuture = widget.client.blocksToday(
         date: date,
         tzOffsetMinutes: tzOffsetMinutes,
       );
-      final segments = await widget.client.timelineDay(date: date, tzOffsetMinutes: tzOffsetMinutes);
-      final viewingToday = _viewingToday();
-      final due = viewingToday ? _findDueBlock(blocks) : null;
+      final segmentsFuture =
+          widget.client.timelineDay(date: date, tzOffsetMinutes: tzOffsetMinutes);
+      final dueFuture = viewingToday
+          ? widget.client.blocksDue(date: date, tzOffsetMinutes: tzOffsetMinutes)
+          : Future<BlockSummary?>.value(null);
+
+      final blocks = await blocksFuture;
+      final segments = await segmentsFuture;
+      final due = await dueFuture;
       if (!mounted) return;
       setState(() {
         _segments = segments;
@@ -940,7 +996,8 @@ class TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  Future<void> refresh({bool silent = false, bool triggerReminder = false}) async {
+  Future<void> refresh(
+      {bool silent = false, bool triggerReminder = false}) async {
     if (!silent) {
       setState(() {
         _loading = true;
@@ -951,7 +1008,8 @@ class TodayScreenState extends State<TodayScreen> {
     if (viewingToday) {
       await _refreshNow(silent: true);
     }
-    await _refreshBlocks(silent: silent, triggerReminder: triggerReminder && viewingToday);
+    await _refreshBlocks(
+        silent: silent, triggerReminder: triggerReminder && viewingToday);
   }
 
   String _ageText(String rfc3339) {
@@ -976,13 +1034,16 @@ class TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  Future<void> _openReviewForEntity({required String kind, required String? entity, String? label}) async {
+  Future<void> _openReviewForEntity(
+      {required String kind, required String? entity, String? label}) async {
     final e = (entity ?? "").trim();
     if (e.isEmpty) return;
     String query;
     if (kind == "domain") {
       final l = (label ?? "").trim();
-      final looksLikeTitle = _coreStoreTitles && l.isNotEmpty && l.toLowerCase() != e.toLowerCase();
+      final looksLikeTitle = _coreStoreTitles &&
+          l.isNotEmpty &&
+          l.toLowerCase() != e.toLowerCase();
       query = looksLikeTitle ? l : e;
     } else {
       var l = (label ?? displayEntity(e)).trim();
@@ -1035,8 +1096,11 @@ class TodayScreenState extends State<TodayScreen> {
       String key;
       if (kind == "domain") {
         final rawTitle = (s.title ?? "").trim();
-        final normTitle = _coreStoreTitles ? normalizeWebTitle(entity, rawTitle) : "";
-        key = (_coreStoreTitles && normTitle.isNotEmpty) ? "domain|$entity|$normTitle" : "domain|$entity";
+        final normTitle =
+            _coreStoreTitles ? normalizeWebTitle(entity, rawTitle) : "";
+        key = (_coreStoreTitles && normTitle.isNotEmpty)
+            ? "domain|$entity|$normTitle"
+            : "domain|$entity";
       } else {
         key = "app|$entity";
       }
@@ -1076,15 +1140,19 @@ class TodayScreenState extends State<TodayScreen> {
     final totalBlocks = _blocks.length;
     final reviewedBlocks = _countReviewedBlocks();
     final pendingBlocks = (totalBlocks - reviewedBlocks).clamp(0, 99999);
-    final progress = totalBlocks <= 0 ? 0.0 : (reviewedBlocks / totalBlocks).clamp(0.0, 1.0);
+    final progress =
+        totalBlocks <= 0 ? 0.0 : (reviewedBlocks / totalBlocks).clamp(0.0, 1.0);
 
     final due = _dueBlock;
-    final dueRange = due == null ? null : "${formatHHMM(due.startTs)}–${formatHHMM(due.endTs)}";
+    final dueRange = due == null
+        ? null
+        : "${formatHHMM(due.startTs)}–${formatHHMM(due.endTs)}";
     final dueTop = due == null ? null : _blockTopLine(due);
     final dueAudioTop = due == null ? null : _blockAudioTop(due);
 
     final scheme = Theme.of(context).colorScheme;
-    final showAndroidLocalhostHint = _isAndroid() && _serverLooksLikeLocalhost();
+    final showAndroidLocalhostHint =
+        _isAndroid() && _serverLooksLikeLocalhost();
 
     Widget metric({
       required IconData icon,
@@ -1136,11 +1204,13 @@ class TodayScreenState extends State<TodayScreen> {
             Row(
               children: [
                 Expanded(
-                  child: Text(viewingToday ? "Today overview" : "Day overview", style: Theme.of(context).textTheme.titleMedium),
+                  child: Text(viewingToday ? "Today overview" : "Day overview",
+                      style: Theme.of(context).textTheme.titleMedium),
                 ),
                 IconButton(
                   tooltip: "Previous day",
-                  onPressed: () => _setDay(_day.subtract(const Duration(days: 1))),
+                  onPressed: () =>
+                      _setDay(_day.subtract(const Duration(days: 1))),
                   icon: const Icon(Icons.chevron_left),
                 ),
                 OutlinedButton.icon(
@@ -1150,7 +1220,9 @@ class TodayScreenState extends State<TodayScreen> {
                 ),
                 IconButton(
                   tooltip: "Next day",
-                  onPressed: _canGoNextDay() ? () => _setDay(_day.add(const Duration(days: 1))) : null,
+                  onPressed: _canGoNextDay()
+                      ? () => _setDay(_day.add(const Duration(days: 1)))
+                      : null,
                   icon: const Icon(Icons.chevron_right),
                 ),
                 const SizedBox(width: RecorderTokens.space2),
@@ -1167,12 +1239,14 @@ class TodayScreenState extends State<TodayScreen> {
                 decoration: BoxDecoration(
                   color: scheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
-                  border: Border.all(color: scheme.outline.withValues(alpha: 0.12)),
+                  border:
+                      Border.all(color: scheme.outline.withValues(alpha: 0.12)),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.phone_android, size: 18, color: scheme.onSurfaceVariant),
+                    Icon(Icons.phone_android,
+                        size: 18, color: scheme.onSurfaceVariant),
                     const SizedBox(width: RecorderTokens.space2),
                     Expanded(
                       child: Text(
@@ -1197,7 +1271,9 @@ class TodayScreenState extends State<TodayScreen> {
                 metric(
                   icon: Icons.timer_outlined,
                   label: "Tracked",
-                  value: trackedSeconds <= 0 ? "—" : formatDuration(trackedSeconds),
+                  value: trackedSeconds <= 0
+                      ? "—"
+                      : formatDuration(trackedSeconds),
                   tooltip: "Focus + background audio",
                 ),
                 metric(
@@ -1214,14 +1290,18 @@ class TodayScreenState extends State<TodayScreen> {
                 metric(
                   icon: Icons.center_focus_strong_outlined,
                   label: "Deep focus",
-                  value: longestStreak <= 0 ? "—" : formatDuration(longestStreak),
+                  value:
+                      longestStreak <= 0 ? "—" : formatDuration(longestStreak),
                   tooltip: "Longest continuous focus segment",
                 ),
                 metric(
                   icon: Icons.list_alt_outlined,
                   label: "Blocks",
-                  value: totalBlocks <= 0 ? "—" : "$reviewedBlocks/$totalBlocks",
-                  tooltip: pendingBlocks <= 0 ? "All reviewed" : "$pendingBlocks pending",
+                  value:
+                      totalBlocks <= 0 ? "—" : "$reviewedBlocks/$totalBlocks",
+                  tooltip: pendingBlocks <= 0
+                      ? "All reviewed"
+                      : "$pendingBlocks pending",
                   onTap: () {
                     _openReview();
                   },
@@ -1250,7 +1330,8 @@ class TodayScreenState extends State<TodayScreen> {
                     ),
                   ),
                   const SizedBox(width: RecorderTokens.space2),
-                  Text("$pendingBlocks pending", style: Theme.of(context).textTheme.labelMedium),
+                  Text("$pendingBlocks pending",
+                      style: Theme.of(context).textTheme.labelMedium),
                 ],
               ),
             ],
@@ -1297,7 +1378,9 @@ class TodayScreenState extends State<TodayScreen> {
               const SizedBox(height: 2),
               Row(
                 children: [
-                  Icon(Icons.headphones, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  Icon(Icons.headphones,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
                   Expanded(
                     child: Text(
@@ -1320,7 +1403,9 @@ class TodayScreenState extends State<TodayScreen> {
     final top = _blockTopLine(due);
     final audioTop = _blockAudioTop(due);
     final title = "${formatHHMM(due.startTs)}–${formatHHMM(due.endTs)}";
-    final audioSuffix = audioTop == null ? "" : " · 🎧 ${audioTop.label} ${formatDuration(audioTop.seconds)}";
+    final audioSuffix = audioTop == null
+        ? ""
+        : " · 🎧 ${audioTop.label} ${formatDuration(audioTop.seconds)}";
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(RecorderTokens.space2),
@@ -1382,9 +1467,16 @@ class TodayScreenState extends State<TodayScreen> {
       }
     }
 
-    final focusFreshness = Duration(seconds: _nowFocusTtlSeconds.clamp(10, 3600));
-    final rawApp = (_latestAppEvent != null && isFresh(_latestAppEvent!, focusFreshness)) ? _latestAppEvent : null;
-    final rawTab = (_latestTabEvent != null && isFresh(_latestTabEvent!, focusFreshness)) ? _latestTabEvent : null;
+    final focusFreshness =
+        Duration(seconds: _nowFocusTtlSeconds.clamp(10, 3600));
+    final rawApp =
+        (_latestAppEvent != null && isFresh(_latestAppEvent!, focusFreshness))
+            ? _latestAppEvent
+            : null;
+    final rawTab =
+        (_latestTabEvent != null && isFresh(_latestTabEvent!, focusFreshness))
+            ? _latestTabEvent
+            : null;
     final audio = _latestAudioEvent;
     final audioStop = _latestAudioStopEvent;
     final appAudio = _latestAppAudioEvent;
@@ -1409,7 +1501,9 @@ class TodayScreenState extends State<TodayScreen> {
       // Fallback: hide "now" audio when the last audio event is stale.
       try {
         final a = DateTime.parse(audio.ts).toLocal();
-        if (DateTime.now().difference(a) > Duration(seconds: _nowAudioTtlSeconds.clamp(30, 3600))) return false;
+        if (DateTime.now().difference(a) >
+            Duration(seconds: _nowAudioTtlSeconds.clamp(30, 3600)))
+          return false;
       } catch (_) {
         // ignore
       }
@@ -1434,7 +1528,9 @@ class TodayScreenState extends State<TodayScreen> {
 
       try {
         final a = DateTime.parse(appAudio.ts).toLocal();
-        if (DateTime.now().difference(a) > Duration(seconds: _nowAudioTtlSeconds.clamp(30, 3600))) return false;
+        if (DateTime.now().difference(a) >
+            Duration(seconds: _nowAudioTtlSeconds.clamp(30, 3600)))
+          return false;
       } catch (_) {
         // ignore
       }
@@ -1445,7 +1541,8 @@ class TodayScreenState extends State<TodayScreen> {
     final showAppAudio = showAppAudioNow();
 
     final rawUsingTab = (() {
-      final appLabelLc = rawApp == null ? "" : displayEntity(rawApp.entity).toLowerCase();
+      final appLabelLc =
+          rawApp == null ? "" : displayEntity(rawApp.entity).toLowerCase();
       final appSaysBrowserFocused = rawApp != null &&
           (appLabelLc == "chrome" ||
               appLabelLc == "msedge" ||
@@ -1454,22 +1551,26 @@ class TodayScreenState extends State<TodayScreen> {
               appLabelLc == "vivaldi" ||
               appLabelLc == "opera" ||
               appLabelLc == "firefox");
-      final browserFocused = appSaysBrowserFocused || (rawApp == null && rawTab != null);
+      final browserFocused =
+          appSaysBrowserFocused || (rawApp == null && rawTab != null);
       return browserFocused ? rawTab : (showAudio ? audio : null);
     })();
 
     final usingTab = _nowUsingTab ?? rawUsingTab;
-    final usingTabIcon = usingTab?.activity == "audio" ? Icons.headphones : Icons.public;
+    final usingTabIcon =
+        usingTab?.activity == "audio" ? Icons.headphones : Icons.public;
 
-    final usingTabMissingTitle =
-        usingTab != null && usingTab.event == "tab_active" && ((usingTab.title ?? "").trim().isEmpty);
+    final usingTabMissingTitle = usingTab != null &&
+        usingTab.event == "tab_active" &&
+        ((usingTab.title ?? "").trim().isEmpty);
 
     final bgAudio = _nowBackgroundAudio ?? (showAppAudio ? appAudio : null);
     final showBgAudio = bgAudio != null;
 
     if (app == null && usingTab == null && !showBgAudio) {
       final age = _latestAnyAgeSeconds;
-      final ageHint = age == null ? "" : "Last event: ${_shortAgeFromSeconds(age)} ago.";
+      final ageHint =
+          age == null ? "" : "Last event: ${_shortAgeFromSeconds(age)} ago.";
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(RecorderTokens.space4),
@@ -1514,7 +1615,9 @@ class TodayScreenState extends State<TodayScreen> {
 
       if (kind == "domain") {
         final domain = entity;
-        final normTitle = (_coreStoreTitles && rawDetail.isNotEmpty) ? normalizeWebTitle(domain, rawDetail) : "";
+        final normTitle = (_coreStoreTitles && rawDetail.isNotEmpty)
+            ? normalizeWebTitle(domain, rawDetail)
+            : "";
         if (normTitle.isNotEmpty) {
           titleText = "$label · $normTitle";
           subtitleText = "$when · ${displayEntity(domain)}";
@@ -1526,7 +1629,9 @@ class TodayScreenState extends State<TodayScreen> {
         final isBrowser = _isBrowserLabel(appLabel);
         if (_coreStoreTitles && rawDetail.isNotEmpty && !isBrowser) {
           final labelLc = appLabel.toLowerCase();
-          final isVscode = labelLc == "code" || labelLc == "vscode" || rawDetail.contains("Visual Studio Code");
+          final isVscode = labelLc == "code" ||
+              labelLc == "vscode" ||
+              rawDetail.contains("Visual Studio Code");
           if (isVscode) {
             final ws = extractVscodeWorkspace(rawDetail);
             if (ws != null && ws.trim().isNotEmpty) {
@@ -1547,8 +1652,9 @@ class TodayScreenState extends State<TodayScreen> {
           label: base,
           icon: kind == "app" ? leadingIcon : null,
         ),
-        trailing:
-            trailingIcon == null ? null : Icon(trailingIcon, size: 18, color: scheme.onSurfaceVariant),
+        trailing: trailingIcon == null
+            ? null
+            : Icon(trailingIcon, size: 18, color: scheme.onSurfaceVariant),
         title: Text(
           titleText,
           style: Theme.of(context).textTheme.bodyLarge,
@@ -1577,7 +1683,9 @@ class TodayScreenState extends State<TodayScreen> {
           children: [
             Row(
               children: [
-                Expanded(child: Text("Now", style: Theme.of(context).textTheme.titleMedium)),
+                Expanded(
+                    child: Text("Now",
+                        style: Theme.of(context).textTheme.titleMedium)),
                 Text(
                   "Updated ${_updatedAge(_nowUpdatedAt)}",
                   style: Theme.of(context).textTheme.labelMedium,
@@ -1590,7 +1698,10 @@ class TodayScreenState extends State<TodayScreen> {
                 label: "Focus app",
                 e: app,
                 leadingIcon: _iconForAppLabel(displayEntity(app.entity)),
-                onTap: () => _openReviewForEntity(kind: "app", entity: app.entity, label: displayEntity(app.entity)),
+                onTap: () => _openReviewForEntity(
+                    kind: "app",
+                    entity: app.entity,
+                    label: displayEntity(app.entity)),
               ),
             if (usingTab != null)
               row(
@@ -1601,8 +1712,13 @@ class TodayScreenState extends State<TodayScreen> {
                 onTap: () {
                   final domain = (usingTab.entity ?? "").trim();
                   final rawTitle = (usingTab.title ?? "").trim();
-                  final title = (_coreStoreTitles && domain.isNotEmpty) ? normalizeWebTitle(domain, rawTitle) : rawTitle;
-                  _openReviewForEntity(kind: "domain", entity: usingTab.entity, label: title.isEmpty ? null : title);
+                  final title = (_coreStoreTitles && domain.isNotEmpty)
+                      ? normalizeWebTitle(domain, rawTitle)
+                      : rawTitle;
+                  _openReviewForEntity(
+                      kind: "domain",
+                      entity: usingTab.entity,
+                      label: title.isEmpty ? null : title);
                 },
               ),
             if (usingTabMissingTitle)
@@ -1644,21 +1760,54 @@ class TodayScreenState extends State<TodayScreen> {
     return "$h:$m";
   }
 
-  void _setTimelineZoom(double z, {bool preserveCenter = true, bool resetScroll = false}) {
+  double? _timelineCenterFrac() {
+    if (!_timelineH.hasClients) return null;
+    final pos = _timelineH.position;
+    final viewport = pos.viewportDimension;
+    final content = pos.maxScrollExtent + viewport;
+    if (content <= 0) return null;
+    return ((pos.pixels + viewport / 2) / content).clamp(0.0, 1.0);
+  }
+
+  void _saveTimelineView() {
+    final frac = _timelineCenterFrac() ?? 0.0;
+    setState(() {
+      _timelineSavedView =
+          _TimelineViewState(zoom: _timelineZoom, centerFrac: frac);
+    });
+  }
+
+  void _restoreTimelineView() {
+    final v = _timelineSavedView;
+    if (v == null) return;
+    setState(() => _timelineSavedView = null);
+    _setTimelineZoom(
+      v.zoom,
+      preserveCenter: false,
+      resetScroll: v.zoom <= 1.01,
+      centerFracOverride: v.centerFrac,
+    );
+  }
+
+  void _setTimelineZoom(
+    double z, {
+    bool preserveCenter = true,
+    bool resetScroll = false,
+    double? centerFracOverride,
+  }) {
     final next = z.clamp(1.0, 4.0);
-    if ((next - _timelineZoom).abs() < 0.001) return;
+    final zoomUnchanged = (next - _timelineZoom).abs() < 0.001;
+    if (zoomUnchanged && !resetScroll && centerFracOverride == null) return;
 
-    final double? centerFrac = (() {
-      if (!preserveCenter) return null;
-      if (!_timelineH.hasClients) return null;
-      final pos = _timelineH.position;
-      final viewport = pos.viewportDimension;
-      final content = pos.maxScrollExtent + viewport;
-      if (content <= 0) return null;
-      return ((pos.pixels + viewport / 2) / content).clamp(0.0, 1.0);
-    })();
+    final double? centerFrac = centerFracOverride?.clamp(0.0, 1.0) ??
+        (() {
+          if (!preserveCenter) return null;
+          return _timelineCenterFrac();
+        })();
 
-    setState(() => _timelineZoom = next);
+    if (!zoomUnchanged) {
+      setState(() => _timelineZoom = next);
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_timelineH.hasClients) return;
@@ -1681,7 +1830,8 @@ class TodayScreenState extends State<TodayScreen> {
 
   void _timelineZoomOut() => _setTimelineZoom(_timelineZoom / 1.25);
 
-  void _timelineResetView() => _setTimelineZoom(1.0, preserveCenter: false, resetScroll: true);
+  void _timelineResetView() =>
+      _setTimelineZoom(1.0, preserveCenter: false, resetScroll: true);
 
   void _timelineCenterOnNow() {
     if (!_timelineH.hasClients) return;
@@ -1693,7 +1843,9 @@ class TodayScreenState extends State<TodayScreen> {
     final content = pos.maxScrollExtent + viewport;
     final x = content * (nowMin / 1440.0);
     final target = (x - viewport / 2).clamp(0.0, pos.maxScrollExtent);
-    pos.animateTo(target, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
+    pos.animateTo(target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic);
   }
 
   List<DayTimelineLane> _buildTimelineLanesAll() {
@@ -1740,7 +1892,8 @@ class TodayScreenState extends State<TodayScreen> {
       if (kind == "domain") {
         final domain = entity.toLowerCase();
         final rawTitle = (s.title ?? "").trim();
-        final normTitle = _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
+        final normTitle =
+            _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
         if (_coreStoreTitles && normTitle.isNotEmpty) {
           laneKey = "domain|$domain|$normTitle";
           label = normTitle;
@@ -1757,7 +1910,9 @@ class TodayScreenState extends State<TodayScreen> {
 
         final t = (s.title ?? "").trim();
         final labelLc = label.toLowerCase();
-        final isVscode = labelLc == "code" || labelLc == "vscode" || t.contains("Visual Studio Code");
+        final isVscode = labelLc == "code" ||
+            labelLc == "vscode" ||
+            t.contains("Visual Studio Code");
         if (_coreStoreTitles && isVscode && t.isNotEmpty) {
           final ws = extractVscodeWorkspace(t);
           if (ws != null && ws.trim().isNotEmpty) {
@@ -1859,8 +2014,10 @@ class TodayScreenState extends State<TodayScreen> {
       }
       if (!segEndUtc.isAfter(segStartUtc)) continue;
 
-      if (!segEndUtc.isAfter(startUtc) || !endUtc.isAfter(segStartUtc)) continue;
-      final overlapStart = segStartUtc.isAfter(startUtc) ? segStartUtc : startUtc;
+      if (!segEndUtc.isAfter(startUtc) || !endUtc.isAfter(segStartUtc))
+        continue;
+      final overlapStart =
+          segStartUtc.isAfter(startUtc) ? segStartUtc : startUtc;
       final overlapEnd = segEndUtc.isBefore(endUtc) ? segEndUtc : endUtc;
       final seconds = overlapEnd.difference(overlapStart).inSeconds;
       if (seconds <= 0) continue;
@@ -1873,7 +2030,8 @@ class TodayScreenState extends State<TodayScreen> {
       if (kind == "domain") {
         final domain = rawEntity.toLowerCase();
         final rawTitle = (s.title ?? "").trim();
-        final normTitle = _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
+        final normTitle =
+            _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
         if (_coreStoreTitles && normTitle.isNotEmpty) {
           key = "domain|$domain|$normTitle";
           entity = domain;
@@ -1891,8 +2049,12 @@ class TodayScreenState extends State<TodayScreen> {
         final title = (s.title ?? "").trim();
 
         final labelLc = appLabel.toLowerCase();
-        final isVscode = labelLc == "code" || labelLc == "vscode" || title.contains("Visual Studio Code");
-        final ws = (_coreStoreTitles && isVscode && title.isNotEmpty) ? extractVscodeWorkspace(title) : null;
+        final isVscode = labelLc == "code" ||
+            labelLc == "vscode" ||
+            title.contains("Visual Studio Code");
+        final ws = (_coreStoreTitles && isVscode && title.isNotEmpty)
+            ? extractVscodeWorkspace(title)
+            : null;
         if (ws != null && ws.trim().isNotEmpty) {
           final w = ws.trim();
           key = "app|$appEntity|$w";
@@ -1904,7 +2066,9 @@ class TodayScreenState extends State<TodayScreen> {
           entity = appEntity;
           label = appLabel;
           subtitle = null;
-          if (_coreStoreTitles && title.isNotEmpty && !_isBrowserLabel(appLabel)) {
+          if (_coreStoreTitles &&
+              title.isNotEmpty &&
+              !_isBrowserLabel(appLabel)) {
             subtitle = title;
           }
         }
@@ -1914,7 +2078,10 @@ class TodayScreenState extends State<TodayScreen> {
       kindByKey[key] = kind;
       entityByKey[key] = entity;
       labelByKey[key] = label;
-      subtitleByKey[key] = (subtitleByKey[key] == null || subtitleByKey[key]!.trim().isEmpty) ? subtitle : subtitleByKey[key];
+      subtitleByKey[key] =
+          (subtitleByKey[key] == null || subtitleByKey[key]!.trim().isEmpty)
+              ? subtitle
+              : subtitleByKey[key];
     }
 
     final out = <_RangeStatItem>[];
@@ -1939,7 +2106,8 @@ class TodayScreenState extends State<TodayScreen> {
     try {
       final startUtc = DateTime.parse(b.startTs).toUtc();
       final endUtc = DateTime.parse(b.endTs).toUtc();
-      return _aggregateSegmentsForRange(startUtc: startUtc, endUtc: endUtc, audio: audio);
+      return _aggregateSegmentsForRange(
+          startUtc: startUtc, endUtc: endUtc, audio: audio);
     } catch (_) {
       return const [];
     }
@@ -1948,17 +2116,19 @@ class TodayScreenState extends State<TodayScreen> {
   String _blockTopLine(BlockSummary b) {
     final focus = _blockRangeItems(b, audio: false);
     if (focus.isEmpty) {
-      return b.topItems.take(3).map((it) => "${displayTopItemName(it)} ${formatDuration(it.seconds)}").join(" · ");
+      return b.topItems
+          .take(3)
+          .map(
+              (it) => "${displayTopItemName(it)} ${formatDuration(it.seconds)}")
+          .join(" · ");
     }
-    return focus
-        .take(3)
-        .map((it) {
-          final sub = (it.subtitle ?? "").trim();
-          final preferWorkspace = it.kind == "app" && sub.toLowerCase().startsWith("workspace:");
-          final name = preferWorkspace ? sub : it.label;
-          return "${name.trim().isEmpty ? "(unknown)" : name.trim()} ${formatDuration(it.seconds)}";
-        })
-        .join(" · ");
+    return focus.take(3).map((it) {
+      final sub = (it.subtitle ?? "").trim();
+      final preferWorkspace =
+          it.kind == "app" && sub.toLowerCase().startsWith("workspace:");
+      final name = preferWorkspace ? sub : it.label;
+      return "${name.trim().isEmpty ? "(unknown)" : name.trim()} ${formatDuration(it.seconds)}";
+    }).join(" · ");
   }
 
   _RangeStatItem? _blockAudioTop(BlockSummary b) {
@@ -1967,7 +2137,8 @@ class TodayScreenState extends State<TodayScreen> {
     return audio.first;
   }
 
-  String _hhmm(DateTime t) => "${t.hour.toString().padLeft(2, "0")}:${t.minute.toString().padLeft(2, "0")}";
+  String _hhmm(DateTime t) =>
+      "${t.hour.toString().padLeft(2, "0")}:${t.minute.toString().padLeft(2, "0")}";
 
   Widget _flowCard(BuildContext context) {
     final items = <_FlowItem>[];
@@ -1978,7 +2149,8 @@ class TodayScreenState extends State<TodayScreen> {
         segs = _segments.where((s) => s.kind == "app" && s.activity != "audio");
         break;
       case _TopFilter.web:
-        segs = _segments.where((s) => s.kind == "domain" && s.activity != "audio");
+        segs =
+            _segments.where((s) => s.kind == "domain" && s.activity != "audio");
         break;
       case _TopFilter.all:
         segs = _segments.where((s) => s.activity != "audio");
@@ -2009,7 +2181,8 @@ class TodayScreenState extends State<TodayScreen> {
       if (kind == "domain") {
         final domain = rawEntity.toLowerCase();
         final rawTitle = (s.title ?? "").trim();
-        final normTitle = _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
+        final normTitle =
+            _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
         if (_coreStoreTitles && normTitle.isNotEmpty) {
           entity = domain;
           label = normTitle;
@@ -2030,10 +2203,14 @@ class TodayScreenState extends State<TodayScreen> {
           final t = (s.title ?? "").trim();
           if (t.isNotEmpty && !_isBrowserLabel(label)) {
             final labelLc = label.toLowerCase();
-            final isVscode = labelLc == "code" || labelLc == "vscode" || t.contains("Visual Studio Code");
+            final isVscode = labelLc == "code" ||
+                labelLc == "vscode" ||
+                t.contains("Visual Studio Code");
             if (isVscode) {
               final ws = extractVscodeWorkspace(t);
-              subtitle = (ws != null && ws.trim().isNotEmpty) ? "Workspace: ${ws.trim()}" : t;
+              subtitle = (ws != null && ws.trim().isNotEmpty)
+                  ? "Workspace: ${ws.trim()}"
+                  : t;
             } else {
               subtitle = t;
             }
@@ -2067,7 +2244,8 @@ class TodayScreenState extends State<TodayScreen> {
             Row(
               children: [
                 Expanded(
-                  child: Text("Flow", style: Theme.of(context).textTheme.titleMedium),
+                  child: Text("Flow",
+                      style: Theme.of(context).textTheme.titleMedium),
                 ),
                 Text(
                   "Updated ${_updatedAge(_blocksUpdatedAt)}",
@@ -2084,7 +2262,8 @@ class TodayScreenState extends State<TodayScreen> {
             else
               ...latestFirst.map((it) {
                 final sub = (it.subtitle ?? "").trim();
-                final meta = "${_hhmm(it.start)}–${_hhmm(it.end)} · ${formatDuration(it.seconds)}";
+                final meta =
+                    "${_hhmm(it.start)}–${_hhmm(it.end)} · ${formatDuration(it.seconds)}";
                 final subtitleText = sub.isEmpty ? meta : "$meta\n$sub";
                 return ListTile(
                   isThreeLine: true,
@@ -2109,9 +2288,11 @@ class TodayScreenState extends State<TodayScreen> {
                     style: Theme.of(context).textTheme.labelMedium,
                   ),
                   onTap: () {
-                    final preferWorkspace = it.kind == "app" && sub.toLowerCase().startsWith("workspace:");
+                    final preferWorkspace = it.kind == "app" &&
+                        sub.toLowerCase().startsWith("workspace:");
                     final label = preferWorkspace ? sub : it.label;
-                    _openReviewForEntity(kind: it.kind, entity: it.entity, label: label);
+                    _openReviewForEntity(
+                        kind: it.kind, entity: it.entity, label: label);
                   },
                 );
               }),
@@ -2119,7 +2300,9 @@ class TodayScreenState extends State<TodayScreen> {
               const SizedBox(height: RecorderTokens.space2),
               Row(
                 children: [
-                  Icon(Icons.lock_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  Icon(Icons.lock_outline,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
                   Expanded(
                     child: Text(
@@ -2148,7 +2331,8 @@ class TodayScreenState extends State<TodayScreen> {
     final viewingToday = _viewingToday();
     final showWeb = _topFilter != _TopFilter.apps;
     final hasWebSeg = _segments.any((s) => s.kind == "domain");
-    final hasWebTitleSeg = _segments.any((s) => s.kind == "domain" && (s.title ?? "").trim().isNotEmpty);
+    final hasWebTitleSeg = _segments
+        .any((s) => s.kind == "domain" && (s.title ?? "").trim().isNotEmpty);
     final canScrollH = _timelineZoom > 1.01;
 
     return Card(
@@ -2159,8 +2343,11 @@ class TodayScreenState extends State<TodayScreen> {
           children: [
             Row(
               children: [
-                Expanded(child: Text("Timeline", style: Theme.of(context).textTheme.titleMedium)),
-                Text("Updated ${_updatedAge(_blocksUpdatedAt)}", style: Theme.of(context).textTheme.labelMedium),
+                Expanded(
+                    child: Text("Timeline",
+                        style: Theme.of(context).textTheme.titleMedium)),
+                Text("Updated ${_updatedAge(_blocksUpdatedAt)}",
+                    style: Theme.of(context).textTheme.labelMedium),
               ],
             ),
             const SizedBox(height: RecorderTokens.space2),
@@ -2169,15 +2356,29 @@ class TodayScreenState extends State<TodayScreen> {
               runSpacing: 0,
               children: [
                 TextButton.icon(
-                  onPressed: () => setState(() => _timelineSortByTime = !_timelineSortByTime),
-                  icon: Icon(_timelineSortByTime ? Icons.schedule : Icons.bar_chart, size: 18),
+                  onPressed: () => setState(
+                      () => _timelineSortByTime = !_timelineSortByTime),
+                  icon: Icon(
+                      _timelineSortByTime ? Icons.schedule : Icons.bar_chart,
+                      size: 18),
                   label: Text(_timelineSortByTime ? "By time" : "By total"),
                 ),
                 if (viewingToday)
                   TextButton.icon(
-                    onPressed: canScrollH ? _timelineCenterOnNow : null,
+                    onPressed: canScrollH
+                        ? () {
+                            _saveTimelineView();
+                            _timelineCenterOnNow();
+                          }
+                        : null,
                     icon: const Icon(Icons.my_location, size: 18),
                     label: const Text("Now"),
+                  ),
+                if (_timelineSavedView != null)
+                  TextButton.icon(
+                    onPressed: _restoreTimelineView,
+                    icon: const Icon(Icons.undo, size: 18),
+                    label: const Text("Back"),
                   ),
                 Tooltip(
                   message: "Zoom out",
@@ -2187,7 +2388,9 @@ class TodayScreenState extends State<TodayScreen> {
                   ),
                 ),
                 OutlinedButton(
-                  onPressed: (_timelineZoom - 1.0).abs() < 0.01 ? null : _timelineResetView,
+                  onPressed: (_timelineZoom - 1.0).abs() < 0.01
+                      ? null
+                      : _timelineResetView,
                   child: Text("x${_timelineZoom.toStringAsFixed(1)}"),
                 ),
                 Tooltip(
@@ -2199,59 +2402,85 @@ class TodayScreenState extends State<TodayScreen> {
                 ),
                 if (hasMore)
                   TextButton.icon(
-                    onPressed: () => setState(() => _timelineShowAll = !_timelineShowAll),
-                    icon: Icon(_timelineShowAll ? Icons.expand_less : Icons.expand_more, size: 18),
+                    onPressed: () =>
+                        setState(() => _timelineShowAll = !_timelineShowAll),
+                    icon: Icon(
+                        _timelineShowAll
+                            ? Icons.expand_less
+                            : Icons.expand_more,
+                        size: 18),
                     label: Text(_timelineShowAll ? "Top 12" : "Show all"),
                   ),
               ],
             ),
             const SizedBox(height: RecorderTokens.space2),
-            DayTimeline(
-              lanes: lanes,
-              showNowIndicator: _viewingToday(),
-              zoom: _timelineZoom,
-              horizontalController: _timelineH,
-              onLaneTap: (lane) {
-                final subtitle = (lane.subtitle ?? "").trim();
-                final preferWorkspace = lane.kind == "app" && subtitle.toLowerCase().startsWith("workspace:");
-                final label = preferWorkspace ? subtitle : lane.label;
-                _openReviewForEntity(kind: lane.kind, entity: lane.entity, label: label);
+            Listener(
+              onPointerSignal: (e) {
+                if (e is! PointerScrollEvent) return;
+                if (!HardwareKeyboard.instance.isControlPressed) return;
+                GestureBinding.instance.pointerSignalResolver.register(e, (_) {
+                  final dy = e.scrollDelta.dy;
+                  if (dy == 0) return;
+                  final factor = dy < 0 ? 1.10 : 0.90;
+                  _setTimelineZoom(_timelineZoom * factor);
+                });
               },
-              onBarTap: (_, bar) {
-                final b = _findBlockForTimelineBar(bar);
-                if (b == null) {
-                  final messenger = ScaffoldMessenger.of(context);
-                  messenger.clearSnackBars();
-                  messenger.showSnackBar(
-                    const SnackBar(duration: Duration(seconds: 3), showCloseIcon: true, content: Text("No matching block")),
-                  );
-                  return;
-                }
-                unawaited(_openBlock(b));
-              },
+              child: DayTimeline(
+                lanes: lanes,
+                showNowIndicator: _viewingToday(),
+                zoom: _timelineZoom,
+                horizontalController: _timelineH,
+                onLaneTap: (lane) {
+                  final subtitle = (lane.subtitle ?? "").trim();
+                  final preferWorkspace = lane.kind == "app" &&
+                      subtitle.toLowerCase().startsWith("workspace:");
+                  final label = preferWorkspace ? subtitle : lane.label;
+                  _openReviewForEntity(
+                      kind: lane.kind, entity: lane.entity, label: label);
+                },
+                onBarTap: (_, bar) {
+                  final b = _findBlockForTimelineBar(bar);
+                  if (b == null) {
+                    final messenger = ScaffoldMessenger.of(context);
+                    messenger.clearSnackBars();
+                    messenger.showSnackBar(
+                      const SnackBar(
+                          duration: Duration(seconds: 3),
+                          showCloseIcon: true,
+                          content: Text("No matching block")),
+                    );
+                    return;
+                  }
+                  unawaited(_openBlock(b));
+                },
+              ),
             ),
             if (lanes.isNotEmpty) ...[
               const SizedBox(height: RecorderTokens.space2),
               Row(
                 children: [
-                  Icon(Icons.touch_app_outlined, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  Icon(Icons.touch_app_outlined,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
-                      Expanded(
-                        child: Text(
-                          canScrollH
-                              ? "Tip: tap a bar to open its block. Zoom/pan doesn't reset when you close the sheet."
-                              : "Tip: tap a bar to open its block. Tap a lane to filter Review.",
-                          style: Theme.of(context).textTheme.labelMedium,
-                        ),
-                      ),
-                    ],
+                  Expanded(
+                    child: Text(
+                      canScrollH
+                          ? "Tip: Ctrl + mouse wheel to zoom, drag to pan. Tap a bar to open its block. View doesn't reset when you close the sheet."
+                          : "Tip: tap a bar to open its block. Tap a lane to filter Review.",
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
                   ),
+                ],
+              ),
             ],
             if (!_coreStoreTitles) ...[
               const SizedBox(height: RecorderTokens.space2),
               Row(
                 children: [
-                  Icon(Icons.lock_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  Icon(Icons.lock_outline,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
                   Expanded(
                     child: Text(
@@ -2266,11 +2495,16 @@ class TodayScreenState extends State<TodayScreen> {
                     ),
                 ],
               ),
-            ] else if (viewingToday && showWeb && hasWebSeg && !hasWebTitleSeg) ...[
+            ] else if (viewingToday &&
+                showWeb &&
+                hasWebSeg &&
+                !hasWebTitleSeg) ...[
               const SizedBox(height: RecorderTokens.space2),
               Row(
                 children: [
-                  Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  Icon(Icons.info_outline,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
                   Expanded(
                     child: Text(
@@ -2291,10 +2525,12 @@ class TodayScreenState extends State<TodayScreen> {
     final focusSeconds = topAgg.focusSeconds;
     final items = _applyTopFilter(topAgg.items);
     final displayItems = items.take(10).toList();
-    final maxSeconds = displayItems.fold<int>(0, (m, it) => it.seconds > m ? it.seconds : m);
+    final maxSeconds =
+        displayItems.fold<int>(0, (m, it) => it.seconds > m ? it.seconds : m);
     final viewingToday = _viewingToday();
     final hasWebSeg = _segments.any((s) => s.kind == "domain");
-    final hasWebTitleSeg = _segments.any((s) => s.kind == "domain" && (s.title ?? "").trim().isNotEmpty);
+    final hasWebTitleSeg = _segments
+        .any((s) => s.kind == "domain" && (s.title ?? "").trim().isNotEmpty);
 
     Widget filters() {
       return Align(
@@ -2334,9 +2570,11 @@ class TodayScreenState extends State<TodayScreen> {
                   borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
                   onTap: () {
                     final subtitle = (it.subtitle ?? "").trim();
-                    final preferWorkspace = it.kind == "app" && subtitle.toLowerCase().startsWith("workspace:");
+                    final preferWorkspace = it.kind == "app" &&
+                        subtitle.toLowerCase().startsWith("workspace:");
                     final label = preferWorkspace ? subtitle : it.label;
-                    _openReviewForEntity(kind: it.kind, entity: it.entity, label: label);
+                    _openReviewForEntity(
+                        kind: it.kind, entity: it.entity, label: label);
                   },
                   child: Padding(
                     padding: const EdgeInsets.all(RecorderTokens.space2),
@@ -2349,7 +2587,9 @@ class TodayScreenState extends State<TodayScreen> {
                               kind: it.kind,
                               entity: it.entity,
                               label: it.label,
-                              icon: it.kind == "app" ? _iconForStatItem(it) : null,
+                              icon: it.kind == "app"
+                                  ? _iconForStatItem(it)
+                                  : null,
                             ),
                             const SizedBox(width: RecorderTokens.space2),
                             Expanded(
@@ -2357,13 +2597,16 @@ class TodayScreenState extends State<TodayScreen> {
                                 builder: (context) {
                                   final subtitle = it.subtitle;
                                   return Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         it.label,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(context).textTheme.bodyLarge,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyLarge,
                                       ),
                                       if (subtitle != null) ...[
                                         const SizedBox(height: 2),
@@ -2371,7 +2614,9 @@ class TodayScreenState extends State<TodayScreen> {
                                           subtitle,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: Theme.of(context).textTheme.labelMedium,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelMedium,
                                         ),
                                       ],
                                     ],
@@ -2380,26 +2625,41 @@ class TodayScreenState extends State<TodayScreen> {
                               ),
                             ),
                             const SizedBox(width: RecorderTokens.space2),
-                            Text(formatDuration(it.seconds), style: Theme.of(context).textTheme.labelMedium),
+                            Text(formatDuration(it.seconds),
+                                style: Theme.of(context).textTheme.labelMedium),
                             if (it.hasAudio) ...[
                               const SizedBox(width: RecorderTokens.space1),
-                              Icon(Icons.headphones, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                              Icon(Icons.headphones,
+                                  size: 16,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant),
                             ],
                             if (it.kind == "domain" || it.kind == "app") ...[
                               const SizedBox(width: RecorderTokens.space1),
                               IconButton(
-                                onPressed: _isBlockedEntity(kind: it.kind, entity: it.entity) || _rulesLoading
+                                onPressed: _isBlockedEntity(
+                                            kind: it.kind, entity: it.entity) ||
+                                        _rulesLoading
                                     ? null
                                     : () => _blacklistEntity(
                                           kind: it.kind,
                                           entity: it.entity,
-                                          displayName: it.kind == "domain" ? it.entity : it.label,
+                                          displayName: it.kind == "domain"
+                                              ? it.entity
+                                              : it.label,
                                         ),
-                                tooltip: _isBlockedEntity(kind: it.kind, entity: it.entity)
+                                tooltip: _isBlockedEntity(
+                                        kind: it.kind, entity: it.entity)
                                     ? "Blacklisted"
-                                    : (it.kind == "domain" ? "Blacklist domain" : "Blacklist app"),
+                                    : (it.kind == "domain"
+                                        ? "Blacklist domain"
+                                        : "Blacklist app"),
                                 icon: Icon(
-                                  _isBlockedEntity(kind: it.kind, entity: it.entity) ? Icons.block : Icons.block_outlined,
+                                  _isBlockedEntity(
+                                          kind: it.kind, entity: it.entity)
+                                      ? Icons.block
+                                      : Icons.block_outlined,
                                 ),
                               ),
                             ],
@@ -2408,9 +2668,13 @@ class TodayScreenState extends State<TodayScreen> {
                         ClipRRect(
                           borderRadius: BorderRadius.circular(6),
                           child: LinearProgressIndicator(
-                            value: maxSeconds <= 0 ? 0.0 : (it.seconds / maxSeconds).clamp(0.0, 1.0),
+                            value: maxSeconds <= 0
+                                ? 0.0
+                                : (it.seconds / maxSeconds).clamp(0.0, 1.0),
                             minHeight: 10,
-                            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
                           ),
                         ),
                       ],
@@ -2432,10 +2696,12 @@ class TodayScreenState extends State<TodayScreen> {
             Row(
               children: [
                 Expanded(
-                  child: Text("Today Top", style: Theme.of(context).textTheme.titleMedium),
+                  child: Text("Today Top",
+                      style: Theme.of(context).textTheme.titleMedium),
                 ),
                 if (focusSeconds > 0)
-                  Text(formatDuration(focusSeconds), style: Theme.of(context).textTheme.labelMedium),
+                  Text(formatDuration(focusSeconds),
+                      style: Theme.of(context).textTheme.labelMedium),
               ],
             ),
             const SizedBox(height: RecorderTokens.space2),
@@ -2446,7 +2712,9 @@ class TodayScreenState extends State<TodayScreen> {
               const SizedBox(height: RecorderTokens.space2),
               Row(
                 children: [
-                  Icon(Icons.touch_app_outlined, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  Icon(Icons.touch_app_outlined,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
                   Expanded(
                     child: Text(
@@ -2461,7 +2729,9 @@ class TodayScreenState extends State<TodayScreen> {
               const SizedBox(height: RecorderTokens.space2),
               Row(
                 children: [
-                  Icon(Icons.lock_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  Icon(Icons.lock_outline,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
                   Expanded(
                     child: Text(
@@ -2480,7 +2750,9 @@ class TodayScreenState extends State<TodayScreen> {
               const SizedBox(height: RecorderTokens.space2),
               Row(
                 children: [
-                  Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  Icon(Icons.info_outline,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   const SizedBox(width: RecorderTokens.space1),
                   Expanded(
                     child: Text(
@@ -2557,7 +2829,9 @@ class TodayScreenState extends State<TodayScreen> {
                             _reviewDueCard(context, due),
                             const SizedBox(height: RecorderTokens.space3),
                           ],
-                          viewingToday ? _nowCard(context) : _nowUnavailableCard(context),
+                          viewingToday
+                              ? _nowCard(context)
+                              : _nowUnavailableCard(context),
                           if (!showEmpty) ...[
                             const SizedBox(height: RecorderTokens.space3),
                             _flowCard(context),
@@ -2566,7 +2840,8 @@ class TodayScreenState extends State<TodayScreen> {
                             _EmptyState(
                               dayLabel: _dateLocal(_day),
                               serverUrl: widget.serverUrl,
-                              onRefresh: () => refresh(triggerReminder: viewingToday),
+                              onRefresh: () =>
+                                  refresh(triggerReminder: viewingToday),
                             ),
                           ],
                         ],
@@ -2580,8 +2855,15 @@ class TodayScreenState extends State<TodayScreen> {
             )
           : ListView.separated(
               padding: const EdgeInsets.all(RecorderTokens.space4),
-              itemCount: 1 + 1 + 1 + 1 + (due != null ? 1 : 0) + 1 + (showEmpty ? 1 : 0),
-              separatorBuilder: (_, __) => const SizedBox(height: RecorderTokens.space3),
+              itemCount: 1 +
+                  1 +
+                  1 +
+                  1 +
+                  (due != null ? 1 : 0) +
+                  1 +
+                  (showEmpty ? 1 : 0),
+              separatorBuilder: (_, __) =>
+                  const SizedBox(height: RecorderTokens.space3),
               itemBuilder: (context, i) {
                 var idx = 0;
                 if (i == idx) return _overviewCard(context, topAgg);
@@ -2596,7 +2878,10 @@ class TodayScreenState extends State<TodayScreen> {
                   if (i == idx) return _reviewDueCard(context, due);
                   idx += 1;
                 }
-                if (i == idx) return viewingToday ? _nowCard(context) : _nowUnavailableCard(context);
+                if (i == idx)
+                  return viewingToday
+                      ? _nowCard(context)
+                      : _nowUnavailableCard(context);
                 idx += 1;
                 return _EmptyState(
                   dayLabel: _dateLocal(_day),
@@ -2633,9 +2918,11 @@ class _ErrorState extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text("Cannot reach Core", style: Theme.of(context).textTheme.titleMedium),
+          Text("Cannot reach Core",
+              style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: RecorderTokens.space2),
-          Text("Server URL: $serverUrl", style: Theme.of(context).textTheme.bodyMedium),
+          Text("Server URL: $serverUrl",
+              style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: RecorderTokens.space2),
           Text("Error: $error", style: Theme.of(context).textTheme.labelMedium),
           const SizedBox(height: RecorderTokens.space4),
@@ -2665,7 +2952,10 @@ class _ErrorState extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.dayLabel, required this.serverUrl, required this.onRefresh});
+  const _EmptyState(
+      {required this.dayLabel,
+      required this.serverUrl,
+      required this.onRefresh});
 
   final String dayLabel;
   final String serverUrl;
@@ -2682,7 +2972,8 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: RecorderTokens.space2),
           Text("Day: $dayLabel", style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: RecorderTokens.space2),
-          Text("Server URL: $serverUrl", style: Theme.of(context).textTheme.bodyMedium),
+          Text("Server URL: $serverUrl",
+              style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: RecorderTokens.space4),
           FilledButton.icon(
             onPressed: onRefresh,

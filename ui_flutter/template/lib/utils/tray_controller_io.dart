@@ -100,6 +100,7 @@ class _IoTrayController with WindowListener implements TrayController {
   Future<void> _showWindow() async {
     try {
       await windowManager.show();
+      await windowManager.restore();
       await windowManager.focus();
     } catch (_) {
       // ignore
@@ -269,7 +270,8 @@ class _IoTrayController with WindowListener implements TrayController {
 
     _tray.registerSystemTrayEventHandler((eventName) {
       if (eventName == kSystemTrayEventClick || eventName == kSystemTrayEventDoubleClick) {
-        unawaited(_toggleWindow());
+        // Keep this simple and reliable: click always brings the window to front.
+        unawaited(_showWindow());
         return;
       }
 

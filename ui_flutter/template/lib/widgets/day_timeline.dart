@@ -1,7 +1,17 @@
 import "package:flutter/material.dart";
+import "package:flutter/gestures.dart";
 
 import "../theme/tokens.dart";
 import "entity_avatar.dart";
+
+class _TimelineScrollBehavior extends MaterialScrollBehavior {
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        ...super.dragDevices,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+      };
+}
 
 class DayTimelineLane {
   const DayTimelineLane({
@@ -134,15 +144,21 @@ class DayTimeline extends StatelessWidget {
                 left: nowX.clamp(0.0, width - 1).toDouble(),
                 top: 0,
                 bottom: 0,
-                child: Container(width: 2, color: scheme.primary.withValues(alpha: 0.60)),
+                child: Container(
+                    width: 2, color: scheme.primary.withValues(alpha: 0.60)),
               ),
             for (final t in major)
               Positioned(
-                left: (width * (t / 1440.0) - 18).clamp(0.0, width - 48).toDouble(),
+                left: (width * (t / 1440.0) - 18)
+                    .clamp(0.0, width - 48)
+                    .toDouble(),
                 top: 2,
                 child: Text(
                   _tickLabel(t),
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(color: labelColor),
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelSmall
+                      ?.copyWith(color: labelColor),
                 ),
               ),
           ],
@@ -177,7 +193,8 @@ class DayTimeline extends StatelessWidget {
                 left: nowX.clamp(0.0, width - 1).toDouble(),
                 top: 0,
                 bottom: 0,
-                child: Container(width: 2, color: scheme.primary.withValues(alpha: 0.60)),
+                child: Container(
+                    width: 2, color: scheme.primary.withValues(alpha: 0.60)),
               ),
             for (var i = 0; i < lanes.length; i++)
               Positioned(
@@ -198,23 +215,33 @@ class DayTimeline extends StatelessWidget {
                 Positioned(
                   left: width * (bar.startMinute / 1440.0),
                   top: (i * laneHeight + vPad).toDouble(),
-                  width: (width * ((bar.endMinute - bar.startMinute) / 1440.0)).clamp(2.0, width).toDouble(),
+                  width: (width * ((bar.endMinute - bar.startMinute) / 1440.0))
+                      .clamp(2.0, width)
+                      .toDouble(),
                   height: barHeight,
                   child: Tooltip(
                     message: bar.tooltip,
                     child: MouseRegion(
-                      cursor: onBarTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+                      cursor: onBarTap == null
+                          ? SystemMouseCursors.basic
+                          : SystemMouseCursors.click,
                       child: Material(
                         color: Colors.transparent,
                         child: InkWell(
-                          onTap: onBarTap == null ? null : () => onBarTap?.call(lanes[i], bar),
+                          onTap: onBarTap == null
+                              ? null
+                              : () => onBarTap?.call(lanes[i], bar),
                           borderRadius: BorderRadius.circular(6),
                           child: Ink(
                             decoration: BoxDecoration(
-                              color: _barColor(scheme, lanes[i].kind, bar.audio),
+                              color:
+                                  _barColor(scheme, lanes[i].kind, bar.audio),
                               borderRadius: BorderRadius.circular(6),
                               border: bar.audio
-                                  ? Border.all(color: scheme.onSurface.withValues(alpha: 0.20), width: 1)
+                                  ? Border.all(
+                                      color: scheme.onSurface
+                                          .withValues(alpha: 0.20),
+                                      width: 1)
                                   : null,
                             ),
                           ),
@@ -233,14 +260,17 @@ class DayTimeline extends StatelessWidget {
         final width = constraints.maxWidth;
         final chartWidth = (width - labelWidth).clamp(0.0, width).toDouble();
         final z = zoom.clamp(1.0, 6.0);
-        final zoomedWidth = (chartWidth * z).clamp(chartWidth, chartWidth * 6.0).toDouble();
+        final zoomedWidth =
+            (chartWidth * z).clamp(chartWidth, chartWidth * 6.0).toDouble();
         final hCtrl = horizontalController;
 
         final labels = Column(
           children: [
             for (final lane in lanes)
               MouseRegion(
-                cursor: onLaneTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+                cursor: onLaneTap == null
+                    ? SystemMouseCursors.basic
+                    : SystemMouseCursors.click,
                 child: InkWell(
                   onTap: onLaneTap == null ? null : () => onLaneTap?.call(lane),
                   child: SizedBox(
@@ -276,7 +306,10 @@ class DayTimeline extends StatelessWidget {
                                     lane.subtitle!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(context).textTheme.labelSmall?.copyWith(color: labelColor),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(color: labelColor),
                                   ),
                                 ],
                               ],
@@ -286,7 +319,10 @@ class DayTimeline extends StatelessWidget {
                         const SizedBox(width: RecorderTokens.space2),
                         Text(
                           _formatDurationShort(lane.totalSeconds),
-                          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: labelColor),
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(color: labelColor),
                         ),
                       ],
                     ),
@@ -305,7 +341,8 @@ class DayTimeline extends StatelessWidget {
                 axisHeader(zoomedWidth),
                 const SizedBox(height: RecorderTokens.space2),
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(RecorderTokens.radiusM.toDouble()),
+                  borderRadius:
+                      BorderRadius.circular(RecorderTokens.radiusM.toDouble()),
                   child: timelineArea(zoomedWidth),
                 ),
               ],
@@ -317,21 +354,27 @@ class DayTimeline extends StatelessWidget {
           }
 
           if (hCtrl == null) {
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              primary: false,
-              child: child,
+            return ScrollConfiguration(
+              behavior: _TimelineScrollBehavior(),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                primary: false,
+                child: child,
+              ),
             );
           }
 
-          return Scrollbar(
-            controller: hCtrl,
-            thumbVisibility: true,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
+          return ScrollConfiguration(
+            behavior: _TimelineScrollBehavior(),
+            child: Scrollbar(
               controller: hCtrl,
-              primary: false,
-              child: child,
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                controller: hCtrl,
+                primary: false,
+                child: child,
+              ),
             ),
           );
         }
@@ -357,7 +400,8 @@ class DayTimeline extends StatelessWidget {
   }
 
   Color _barColor(ColorScheme scheme, String kind, bool audio) {
-    final base = kind == "app" ? scheme.primaryContainer : scheme.secondaryContainer;
+    final base =
+        kind == "app" ? scheme.primaryContainer : scheme.secondaryContainer;
     return audio ? base.withValues(alpha: 0.55) : base;
   }
 }

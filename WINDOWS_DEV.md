@@ -183,6 +183,7 @@ taskkill /PID <PID> /F
 3. Windows：扩展重新加载，切换几个 tab
 4. Flutter：`Today` 页能看到 `Today Top`（应用/域名列表，带时长条形图）
 5. Flutter：去 `Review` 页打开任意 block，弹出 `Block details`，能看到 TopN 条形图/Tags/黑名单按钮（含 Background audio）
+6. Flutter：`Timeline` 支持 `Ctrl + 鼠标滚轮` 缩放、鼠标拖拽横向平移；点条形段 → 直达对应 block 详情；点 `Now` 后可用 `Back` 回到原视图
 
 ---
 
@@ -236,6 +237,44 @@ powershell -ExecutionPolicy Bypass -File .\dev\package-windows.ps1 -InstallProto
 
 ### 打包约定（UI 如何识别“打包模式”）
 当 `recorder_core.exe` 与 `windows_collector.exe` **放在 UI exe 同目录**（或同目录的 `bin/`）时，UI 会优先用这些二进制启动 Core/Collector（不依赖 repoRoot、不依赖 PowerShell）。
+
+---
+
+## 8) 开机自启（登录后最小化到托盘）
+
+在 RecorderPhone UI：
+- `Settings → Server → Start with Windows` 打开开关
+
+效果：
+- 下次 Windows 登录后会自动启动 RecorderPhone（带 `--minimized`，默认不弹窗口）
+- UI 会 best-effort 自动确保本机 Agent（Core/Collector）运行
+
+关闭方式：
+- 回到同一开关关闭即可（会删除注册表 Run 项）
+
+---
+
+## 9) 每日/每周 LLM 报表（OpenAI-compatible 云端）
+
+你可以让 RecorderPhone **每天自动生成昨天的日报表格**、每周自动生成上周周报表格（输出 Markdown，存到 Core 的 `/reports`）。
+
+配置入口：
+- UI 底部/侧边栏 `Reports` → 展开 `Report settings`
+
+需要填的字段：
+- `API Base URL`：例如 `https://api.openai.com/v1`（也可换成任意 OpenAI-compatible 服务的 `/v1`）
+- `API Key`：Bearer token
+- `Model`：例如 `gpt-4o-mini`
+
+定时：
+- `Daily (yesterday)`：每天本地时间到点后生成“昨天”的日报
+- `Weekly (last week)`：每周到点后生成“上周”的周报（可选周几 + 时间）
+
+查看输出：
+- UI 底部/侧边栏 `Reports` 标签页
+
+提示：
+- 报表输入 JSON 会遵循 `Privacy L1/L2/L3`：L1 基本只看到域名/应用聚合；L2 才会包含标题粒度（比如 YouTube 视频标题、VS Code workspace 名称）。
 
 数据落盘位置：
 - DB：`%LOCALAPPDATA%\\RecorderPhone\\recorder-core.db`

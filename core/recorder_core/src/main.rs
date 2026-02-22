@@ -8,7 +8,7 @@ use axum::{
 use clap::Parser;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
@@ -27,6 +27,54 @@ const TZ_OFFSET_MINUTES_MAX: i32 = 14 * 60;
 // This must be >= browser extension heartbeat (default 60s), with slack for MV3 background throttling.
 const DOMAIN_FRESHNESS_SECONDS: i64 = 300;
 const AUDIO_IDLE_CUTOFF_SECONDS: i64 = 120;
+const DEFAULT_REVIEW_MIN_SECONDS: i64 = 5 * 60;
+const DEFAULT_REVIEW_NOTIFY_REPEAT_MINUTES: i64 = 10;
+const REVIEW_MIN_SECONDS_MIN: i64 = 60;
+const REVIEW_MIN_SECONDS_MAX: i64 = 4 * 60 * 60;
+const REVIEW_NOTIFY_REPEAT_MINUTES_MIN: i64 = 1;
+const REVIEW_NOTIFY_REPEAT_MINUTES_MAX: i64 = 24 * 60;
+const REVIEW_LAST_BLOCK_END_GRACE_SECONDS: i64 = 30;
+
+const DEFAULT_DAILY_PROMPT: &str = r#"
+你是严格的个人复盘助手。只能使用我提供的 JSON 数据，不要猜测/脑补；缺失信息用 N/A。
+只输出 Markdown（不要代码围栏），不要输出任何额外解释。
+
+目标：把 {{date}} 的使用记录整理成可直接贴到笔记里的“日报表格”，并给出 3~5 条可执行建议。
+
+输出结构：
+1) 标题：# {{date}} 日报（RecorderPhone）
+2) 概览表（必须是 Markdown 表格）：
+| 指标 | 值 | 备注 |
+至少包含：Focus 总时长、Background audio 总时长、Blocks 数、已复盘 Blocks 数、未复盘 Blocks 数、Top1 占比、最晚活动时间、隐私级别。
+3) Top 列表（最多 10 行，表格）：
+| Rank | 类型(app/site) | 名称(优先 title；没有就用域名/应用) | 次级信息(域名/应用) | 时长 | 占比 | 黑名单? |
+4) Blocks 表（按时间升序，最多 20 行，超出就合并为“其余”一行）：
+| 时间段 | Top Focus | Focus 时长 | Top Audio | Audio 时长 | doing/output/next(若有) | Tags | 状态(reviewed/skipped/pending) |
+5) 洞察与建议：3~5 条 bullet，每条以 “Action:” 开头，必须可执行且与数据强相关。
+
+输入 JSON：
+{{json}}
+"#;
+
+const DEFAULT_WEEKLY_PROMPT: &str = r#"
+你是严格的周复盘助手。只能使用我提供的 JSON 数据，不要猜测；缺失信息用 N/A。
+只输出 Markdown（不要代码围栏），不要输出任何额外解释。
+
+目标：把 {{week_start}}~{{week_end}} 的记录整理成“周报表格 + 下周实验建议”。
+
+输出结构：
+1) 标题：# 周报 {{week_start}} ~ {{week_end}}（RecorderPhone）
+2) 每日概览表（表格，按日期升序）：
+| 日期 | Focus 时长 | Audio 时长 | Blocks | 已复盘 | Top1 | Top1 占比 |
+3) 本周 Top（最多 15 行，表格）：
+| Rank | 类型(app/site) | 名称(优先 title；没有就用域名/应用) | 次级信息 | 总时长 | 占比 |
+4) 未复盘清单（如有，表格，最多 10 行）：
+| 日期 | 时间段 | Top Focus | 备注 |
+5) 下周建议（3~5 条 bullet，以 “Action:” 开头），并给出 1 个“可量化实验”。
+
+输入 JSON：
+{{json}}
+"#;
 
 #[derive(Parser, Debug)]
 #[command(name = "recorder_core", version)]
@@ -58,6 +106,8 @@ struct Args {
 struct AppState {
     conn: Arc<Mutex<Connection>>,
     settings: Arc<Mutex<Settings>>,
+    report_settings: Arc<Mutex<ReportSettings>>,
+    data_dir: PathBuf,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -66,6 +116,65 @@ struct Settings {
     idle_cutoff_seconds: i64,
     store_titles: bool,
     store_exe_path: bool,
+    /// Minimum block duration before it can become "due" for review.
+    review_min_seconds: i64,
+    /// Minimum minutes between repeated review notifications for the same due block (Windows toast).
+    review_notify_repeat_minutes: i64,
+    /// Whether reminders are allowed even when tracking is paused.
+    review_notify_when_paused: bool,
+    /// Whether reminders are allowed even when the machine is idle (Windows toast).
+    review_notify_when_idle: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct ReportSettings {
+    enabled: bool,
+    api_base_url: String, // e.g. https://api.openai.com/v1
+    api_key: String,
+    model: String,
+    daily_enabled: bool,
+    daily_at_minutes: i64, // 0..1439 (local)
+    daily_prompt: String,
+    weekly_enabled: bool,
+    weekly_weekday: i32,   // 1=Mon..7=Sun
+    weekly_at_minutes: i64, // 0..1439 (local)
+    weekly_prompt: String,
+    save_md: bool,
+    save_csv: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_dir: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Serialize)]
+struct ReportSettingsWithResolved {
+    #[serde(flatten)]
+    settings: ReportSettings,
+    effective_output_dir: String,
+    default_daily_prompt: &'static str,
+    default_weekly_prompt: &'static str,
+}
+
+impl ReportSettings {
+    fn defaults(updated_at: &str) -> Self {
+        Self {
+            enabled: false,
+            api_base_url: "https://api.openai.com/v1".to_string(),
+            api_key: String::new(),
+            model: "gpt-4o-mini".to_string(),
+            daily_enabled: false,
+            daily_at_minutes: 10,
+            daily_prompt: DEFAULT_DAILY_PROMPT.to_string(),
+            weekly_enabled: false,
+            weekly_weekday: 1, // Monday
+            weekly_at_minutes: 20,
+            weekly_prompt: DEFAULT_WEEKLY_PROMPT.to_string(),
+            save_md: true,
+            save_csv: false,
+            output_dir: None,
+            updated_at: updated_at.to_string(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -592,6 +701,46 @@ struct SettingsUpdate {
     store_titles: Option<bool>,
     #[serde(default)]
     store_exe_path: Option<bool>,
+    #[serde(default)]
+    review_min_seconds: Option<i64>,
+    #[serde(default)]
+    review_notify_repeat_minutes: Option<i64>,
+    #[serde(default)]
+    review_notify_when_paused: Option<bool>,
+    #[serde(default)]
+    review_notify_when_idle: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ReportSettingsUpdate {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    api_base_url: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    daily_enabled: Option<bool>,
+    #[serde(default)]
+    daily_at_minutes: Option<i64>,
+    #[serde(default)]
+    daily_prompt: Option<String>,
+    #[serde(default)]
+    weekly_enabled: Option<bool>,
+    #[serde(default)]
+    weekly_weekday: Option<i32>,
+    #[serde(default)]
+    weekly_at_minutes: Option<i64>,
+    #[serde(default)]
+    weekly_prompt: Option<String>,
+    #[serde(default)]
+    save_md: Option<bool>,
+    #[serde(default)]
+    save_csv: Option<bool>,
+    #[serde(default)]
+    output_dir: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -627,12 +776,14 @@ struct DeleteDayResult {
     end_ts: String,
     events_deleted: i64,
     reviews_deleted: i64,
+    reports_deleted: i64,
 }
 
 #[derive(Serialize)]
 struct WipeAllResult {
     events_deleted: i64,
     reviews_deleted: i64,
+    reports_deleted: i64,
 }
 
 #[derive(Clone, Serialize)]
@@ -782,20 +933,33 @@ async fn main() -> anyhow::Result<()> {
         idle_cutoff_seconds: args.idle_cutoff_seconds,
         store_titles: false,
         store_exe_path: false,
+        review_min_seconds: DEFAULT_REVIEW_MIN_SECONDS,
+        review_notify_repeat_minutes: DEFAULT_REVIEW_NOTIFY_REPEAT_MINUTES,
+        review_notify_when_paused: false,
+        review_notify_when_idle: false,
     };
 
     if let Some(parent) = args.db.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let data_dir = args
+        .db
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
 
     let mut conn = Connection::open(&args.db)?;
     init_db(&conn)?;
     let settings = load_or_init_settings(&mut conn, default_settings)?;
+    let report_settings = load_or_init_report_settings(&mut conn)?;
 
     let state = AppState {
         conn: Arc::new(Mutex::new(conn)),
         settings: Arc::new(Mutex::new(settings)),
+        report_settings: Arc::new(Mutex::new(report_settings)),
+        data_dir,
     };
+    let scheduler_state = state.clone();
 
     let cors = CorsLayer::new()
         .allow_origin(HeaderValue::from_static("*"))
@@ -848,8 +1012,39 @@ async fn main() -> anyhow::Result<()> {
         .route("/data/wipe", post(post_data_wipe).options(options_ok))
         .route("/export/markdown", get(get_export_markdown))
         .route("/export/csv", get(get_export_csv))
+        .route(
+            "/reports/settings",
+            get(get_report_settings)
+                .post(post_report_settings)
+                .options(options_ok),
+        )
+        .route(
+            "/reports/generate/daily",
+            post(post_generate_daily_report).options(options_ok),
+        )
+        .route(
+            "/reports/generate/weekly",
+            post(post_generate_weekly_report).options(options_ok),
+        )
+        .route(
+            "/reports",
+            get(get_reports)
+                .post(post_report)
+                .options(options_ok),
+        )
+        .route(
+            "/reports/:id",
+            get(get_report_by_id)
+                .delete(delete_report)
+                .options(options_ok),
+        )
         .with_state(state)
         .layer(cors);
+
+    // Background reports scheduler: runs even if the UI is closed (as long as Core keeps running).
+    tokio::spawn(async move {
+        report_scheduler_loop(scheduler_state).await;
+    });
 
     let addr = parse_listen(&args.listen)?;
     info!("Core listening on http://{addr}");
@@ -1352,6 +1547,32 @@ async fn post_settings(State(state): State<AppState>, Json(req): Json<SettingsUp
                 .into_response();
         }
     }
+    if let Some(review_min_seconds) = req.review_min_seconds {
+        if !(REVIEW_MIN_SECONDS_MIN..=REVIEW_MIN_SECONDS_MAX).contains(&review_min_seconds) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "invalid_review_min_seconds",
+                }),
+            )
+                .into_response();
+        }
+    }
+    if let Some(repeat_minutes) = req.review_notify_repeat_minutes {
+        if !(REVIEW_NOTIFY_REPEAT_MINUTES_MIN..=REVIEW_NOTIFY_REPEAT_MINUTES_MAX)
+            .contains(&repeat_minutes)
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "invalid_review_notify_repeat_minutes",
+                }),
+            )
+                .into_response();
+        }
+    }
 
     let mut settings = { *state.settings.lock().await };
     if let Some(v) = req.block_seconds {
@@ -1365,6 +1586,21 @@ async fn post_settings(State(state): State<AppState>, Json(req): Json<SettingsUp
     }
     if let Some(v) = req.store_exe_path {
         settings.store_exe_path = v;
+    }
+    if let Some(v) = req.review_min_seconds {
+        settings.review_min_seconds = v.clamp(REVIEW_MIN_SECONDS_MIN, REVIEW_MIN_SECONDS_MAX);
+    }
+    if let Some(v) = req.review_notify_repeat_minutes {
+        settings.review_notify_repeat_minutes = v.clamp(
+            REVIEW_NOTIFY_REPEAT_MINUTES_MIN,
+            REVIEW_NOTIFY_REPEAT_MINUTES_MAX,
+        );
+    }
+    if let Some(v) = req.review_notify_when_paused {
+        settings.review_notify_when_paused = v;
+    }
+    if let Some(v) = req.review_notify_when_idle {
+        settings.review_notify_when_idle = v;
     }
 
     let updated_at = OffsetDateTime::now_utc()
@@ -1393,6 +1629,148 @@ async fn post_settings(State(state): State<AppState>, Json(req): Json<SettingsUp
     Json(OkResponse {
         ok: true,
         data: Some(settings),
+    })
+    .into_response()
+}
+
+async fn get_report_settings(State(state): State<AppState>) -> Response {
+    let settings = { state.report_settings.lock().await.clone() };
+    let effective_output_dir = resolve_reports_output_dir(&state, &settings)
+        .display()
+        .to_string();
+    Json(OkResponse {
+        ok: true,
+        data: Some(ReportSettingsWithResolved {
+            settings,
+            effective_output_dir,
+            default_daily_prompt: DEFAULT_DAILY_PROMPT,
+            default_weekly_prompt: DEFAULT_WEEKLY_PROMPT,
+        }),
+    })
+    .into_response()
+}
+
+async fn post_report_settings(
+    State(state): State<AppState>,
+    Json(req): Json<ReportSettingsUpdate>,
+) -> Response {
+    if let Some(v) = req.daily_at_minutes {
+        if !(0..=1439).contains(&v) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "invalid_daily_at_minutes",
+                }),
+            )
+                .into_response();
+        }
+    }
+    if let Some(v) = req.weekly_weekday {
+        if !(1..=7).contains(&v) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "invalid_weekly_weekday",
+                }),
+            )
+                .into_response();
+        }
+    }
+    if let Some(v) = req.weekly_at_minutes {
+        if !(0..=1439).contains(&v) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "invalid_weekly_at_minutes",
+                }),
+            )
+                .into_response();
+        }
+    }
+
+    let mut settings = { state.report_settings.lock().await.clone() };
+    if let Some(v) = req.enabled {
+        settings.enabled = v;
+    }
+    if let Some(v) = req.api_base_url {
+        settings.api_base_url = v.trim().to_string();
+    }
+    if let Some(v) = req.api_key {
+        settings.api_key = v.trim().to_string();
+    }
+    if let Some(v) = req.model {
+        settings.model = v.trim().to_string();
+    }
+    if let Some(v) = req.daily_enabled {
+        settings.daily_enabled = v;
+    }
+    if let Some(v) = req.daily_at_minutes {
+        settings.daily_at_minutes = v;
+    }
+    if let Some(v) = req.daily_prompt {
+        settings.daily_prompt = v;
+    }
+    if let Some(v) = req.weekly_enabled {
+        settings.weekly_enabled = v;
+    }
+    if let Some(v) = req.weekly_weekday {
+        settings.weekly_weekday = v;
+    }
+    if let Some(v) = req.weekly_at_minutes {
+        settings.weekly_at_minutes = v;
+    }
+    if let Some(v) = req.weekly_prompt {
+        settings.weekly_prompt = v;
+    }
+    if let Some(v) = req.save_md {
+        settings.save_md = v;
+    }
+    if let Some(v) = req.save_csv {
+        settings.save_csv = v;
+    }
+    if let Some(v) = req.output_dir {
+        let t = v.trim().to_string();
+        settings.output_dir = if t.is_empty() { None } else { Some(t) };
+    }
+
+    settings.updated_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
+
+    {
+        let mut conn = state.conn.lock().await;
+        if let Err(err) = upsert_report_settings(&mut conn, &settings) {
+            error!("upsert_report_settings failed: {err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "db_error",
+                }),
+            )
+                .into_response();
+        }
+    }
+
+    {
+        let mut guard = state.report_settings.lock().await;
+        *guard = settings.clone();
+    }
+
+    let effective_output_dir = resolve_reports_output_dir(&state, &settings)
+        .display()
+        .to_string();
+    Json(OkResponse {
+        ok: true,
+        data: Some(ReportSettingsWithResolved {
+            settings,
+            effective_output_dir,
+            default_daily_prompt: DEFAULT_DAILY_PROMPT,
+            default_weekly_prompt: DEFAULT_WEEKLY_PROMPT,
+        }),
     })
     .into_response()
 }
@@ -1479,13 +1857,16 @@ fn block_is_reviewed(r: &BlockReview) -> bool {
 
 fn find_due_block(
     blocks: &[BlockSummary],
-    block_seconds: i64,
+    settings: Settings,
     now: OffsetDateTime,
 ) -> Option<BlockSummary> {
     if blocks.is_empty() {
         return None;
     }
-    let min_seconds = 5 * 60;
+    let min_seconds = settings
+        .review_min_seconds
+        .clamp(REVIEW_MIN_SECONDS_MIN, REVIEW_MIN_SECONDS_MAX);
+    let block_seconds = settings.block_seconds.max(60);
 
     for i in (0..blocks.len()).rev() {
         let b = &blocks[i];
@@ -1508,7 +1889,7 @@ fn find_due_block(
         }
 
         if let Ok(end) = OffsetDateTime::parse(&b.end_ts, &Rfc3339) {
-            if now - end > time::Duration::seconds(30) {
+            if now - end > time::Duration::seconds(REVIEW_LAST_BLOCK_END_GRACE_SECONDS) {
                 return Some(b.clone());
             }
         }
@@ -1576,7 +1957,7 @@ async fn get_blocks_due(State(state): State<AppState>, Query(q): Query<BlocksQue
         })
     };
 
-    let due = find_due_block(&blocks_with_reviews, settings.block_seconds.max(60), now);
+    let due = find_due_block(&blocks_with_reviews, settings, now);
 
     Json(OkResponse {
         ok: true,
@@ -2011,6 +2392,24 @@ async fn post_data_delete_day(
         }
     };
 
+    let reports_deleted = match conn.execute(
+        "DELETE FROM reports WHERE period_start <= ?1 AND period_end >= ?1",
+        [&req.date],
+    ) {
+        Ok(n) => n as i64,
+        Err(err) => {
+            error!("delete reports failed: {err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "db_error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
     Json(OkResponse {
         ok: true,
         data: Some(DeleteDayResult {
@@ -2020,6 +2419,7 @@ async fn post_data_delete_day(
             end_ts: end_s,
             events_deleted,
             reviews_deleted,
+            reports_deleted,
         }),
     })
     .into_response()
@@ -2058,6 +2458,21 @@ async fn post_data_wipe(State(state): State<AppState>) -> Response {
         }
     };
 
+    let reports_deleted = match conn.execute("DELETE FROM reports", []) {
+        Ok(n) => n as i64,
+        Err(err) => {
+            error!("wipe reports failed: {err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "db_error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
     // Best effort: reset AUTOINCREMENT sequence so ids start small again.
     // Ignore errors (sqlite_sequence may not exist depending on build/pragma).
     let _ = conn.execute("DELETE FROM sqlite_sequence WHERE name = 'events'", []);
@@ -2067,6 +2482,7 @@ async fn post_data_wipe(State(state): State<AppState>) -> Response {
         data: Some(WipeAllResult {
             events_deleted,
             reviews_deleted,
+            reports_deleted,
         }),
     })
     .into_response()
@@ -2203,6 +2619,1550 @@ async fn get_export_csv(State(state): State<AppState>, Query(q): Query<ExportQue
         .into_response()
 }
 
+#[derive(Deserialize)]
+struct ReportsQuery {
+    #[serde(default = "default_reports_limit")]
+    limit: usize,
+}
+
+fn default_reports_limit() -> usize {
+    50
+}
+
+#[derive(Clone, Serialize)]
+struct ReportSummary {
+    id: String,
+    kind: String,         // "daily" | "weekly"
+    period_start: String, // YYYY-MM-DD
+    period_end: String,   // YYYY-MM-DD
+    generated_at: String, // RFC3339
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    has_output: bool,
+    has_error: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct ReportRecord {
+    id: String,
+    kind: String,
+    period_start: String,
+    period_end: String,
+    generated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_md: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReportUpsert {
+    id: String,
+    kind: String,
+    period_start: String,
+    period_end: String,
+    #[serde(default)]
+    generated_at: Option<String>,
+    #[serde(default)]
+    provider_url: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    input_json: Option<String>,
+    #[serde(default)]
+    output_md: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn validate_report_kind(kind: &str) -> bool {
+    kind == "daily" || kind == "weekly"
+}
+
+fn validate_yyyy_mm_dd(s: &str) -> bool {
+    // Minimal, fast validation; lexicographic order matches chronological order for YYYY-MM-DD.
+    if s.len() != 10 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    if bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    bytes
+        .iter()
+        .enumerate()
+        .all(|(i, b)| i == 4 || i == 7 || (*b >= b'0' && *b <= b'9'))
+}
+
+#[derive(Deserialize)]
+struct GenerateDailyReportRequest {
+    /// Local date in YYYY-MM-DD. If omitted, defaults to yesterday (local).
+    #[serde(default)]
+    date: Option<String>,
+    /// Optional override when Core is not running in the user's local timezone.
+    #[serde(default)]
+    tz_offset_minutes: Option<i32>,
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Deserialize)]
+struct GenerateWeeklyReportRequest {
+    /// Any local date within the target week (YYYY-MM-DD). If omitted, defaults to last week.
+    #[serde(default)]
+    week_start: Option<String>,
+    /// Optional override when Core is not running in the user's local timezone.
+    #[serde(default)]
+    tz_offset_minutes: Option<i32>,
+    #[serde(default)]
+    force: bool,
+}
+
+fn report_id_daily(date: &str) -> String {
+    format!("daily-{date}")
+}
+
+fn report_id_weekly(start: &str, end: &str) -> String {
+    format!("weekly-{start}-{end}")
+}
+
+fn report_is_good(r: &ReportRecord) -> bool {
+    let out_ok = r
+        .output_md
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let err_ok = r
+        .error
+        .as_deref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true);
+    out_ok && err_ok
+}
+
+fn report_settings_is_configured(s: &ReportSettings) -> bool {
+    if !s.enabled {
+        return false;
+    }
+    let base = s.api_base_url.trim();
+    if base.is_empty() {
+        return false;
+    }
+    if s.api_key.trim().is_empty() {
+        return false;
+    }
+    if s.model.trim().is_empty() {
+        return false;
+    }
+    let Ok(u) = base.parse::<reqwest::Url>() else {
+        return false;
+    };
+    if u.scheme() != "http" && u.scheme() != "https" {
+        return false;
+    }
+    if u.host_str().unwrap_or("").trim().is_empty() {
+        return false;
+    }
+    true
+}
+
+fn privacy_level_label(s: Settings) -> &'static str {
+    if s.store_exe_path {
+        "L3"
+    } else if s.store_titles {
+        "L2"
+    } else {
+        "L1"
+    }
+}
+
+fn extract_vscode_workspace(title: &str) -> Option<String> {
+    let mut s = title.trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Strip suffix like " - Visual Studio Code" (and any variants).
+    for suffix in [
+        " - Visual Studio Code",
+        " — Visual Studio Code",
+        " – Visual Studio Code",
+        " - Visual Studio Code Insiders",
+        " — Visual Studio Code Insiders",
+        " – Visual Studio Code Insiders",
+    ] {
+        if s.ends_with(suffix) {
+            let cut = s.len().saturating_sub(suffix.len());
+            s.truncate(cut);
+            break;
+        }
+    }
+    s = s.trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Titles are often "file - folder" or "workspace - file - folder".
+    let parts: Vec<String> = s
+        .split(['-', '—', '–'])
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .map(|p| p.to_string())
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    if parts.len() >= 2 {
+        return Some(parts[parts.len() - 1].clone());
+    }
+    Some(parts[0].clone())
+}
+
+fn display_entity(raw: &str) -> String {
+    let v = raw.trim();
+    if v.is_empty() {
+        return "(unknown)".to_string();
+    }
+    if v == "__hidden__" {
+        return "(hidden)".to_string();
+    }
+    let base = v.rsplit(['\\', '/']).next().unwrap_or(v);
+    let lower = base.to_lowercase();
+    if lower.ends_with(".exe") && base.len() >= 4 {
+        return base[..base.len() - 4].to_string();
+    }
+    base.to_string()
+}
+
+fn is_blocked_domain(domain: &str, blocked: &HashSet<String>) -> bool {
+    let d = domain.trim().to_lowercase();
+    if d.is_empty() {
+        return false;
+    }
+    if blocked.contains(&d) {
+        return true;
+    }
+    // Suffix match like Core privacy rules: youtube.com matches m.youtube.com.
+    let mut candidate: &str = d.as_str();
+    loop {
+        let Some((_left, rest)) = candidate.split_once('.') else {
+            break;
+        };
+        if !rest.contains('.') {
+            break;
+        }
+        candidate = rest;
+        if blocked.contains(candidate) {
+            return true;
+        }
+    }
+    false
+}
+
+fn tz_offset_minutes_for_day_local(date: &str) -> Option<i32> {
+    use chrono::{Local, NaiveDate, TimeZone};
+    let parts: Vec<&str> = date.trim().split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u32 = parts[1].parse().ok()?;
+    let d: u32 = parts[2].parse().ok()?;
+    let day = NaiveDate::from_ymd_opt(y, m, d)?;
+    let noon = day.and_hms_opt(12, 0, 0)?;
+    let dt = Local.from_local_datetime(&noon).single()?;
+    Some(dt.offset().local_minus_utc() / 60)
+}
+
+fn date_local_today() -> String {
+    use chrono::Local;
+    Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn date_local_yesterday() -> String {
+    use chrono::{Duration, Local};
+    (Local::now() - Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn start_of_week_monday(date_local: &str) -> Option<String> {
+    use chrono::{Datelike, Duration, NaiveDate};
+    let parts: Vec<&str> = date_local.trim().split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u32 = parts[1].parse().ok()?;
+    let d: u32 = parts[2].parse().ok()?;
+    let day = NaiveDate::from_ymd_opt(y, m, d)?;
+    let weekday = day.weekday().number_from_monday() as i64; // 1..7
+    let monday = day - Duration::days(weekday - 1);
+    Some(monday.format("%Y-%m-%d").to_string())
+}
+
+async fn get_reports(State(state): State<AppState>, Query(q): Query<ReportsQuery>) -> Response {
+    let limit = q.limit.clamp(1, 200);
+    let mut conn = state.conn.lock().await;
+    match list_reports(&mut conn, limit) {
+        Ok(list) => Json(OkResponse {
+            ok: true,
+            data: Some(list),
+        })
+        .into_response(),
+        Err(err) => {
+            error!("list_reports failed: {err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "db_error",
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn post_generate_daily_report(
+    State(state): State<AppState>,
+    Json(req): Json<GenerateDailyReportRequest>,
+) -> Response {
+    let report_settings = { state.report_settings.lock().await.clone() };
+    if !report_settings_is_configured(&report_settings) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "llm_not_configured",
+            }),
+        )
+            .into_response();
+    }
+
+    let date = req
+        .date
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(date_local_yesterday);
+    if !validate_yyyy_mm_dd(&date) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "invalid_date",
+            }),
+        )
+            .into_response();
+    }
+
+    let tz_offset_minutes = req
+        .tz_offset_minutes
+        .or_else(|| tz_offset_minutes_for_day_local(&date))
+        .unwrap_or(0)
+        .clamp(TZ_OFFSET_MINUTES_MIN, TZ_OFFSET_MINUTES_MAX);
+
+    let res = match generate_daily_report(
+        &state,
+        &report_settings,
+        &date,
+        tz_offset_minutes,
+        req.force,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            error!("generate_daily_report failed: {err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "internal_error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    Json(OkResponse {
+        ok: true,
+        data: Some(res),
+    })
+    .into_response()
+}
+
+async fn post_generate_weekly_report(
+    State(state): State<AppState>,
+    Json(req): Json<GenerateWeeklyReportRequest>,
+) -> Response {
+    let report_settings = { state.report_settings.lock().await.clone() };
+    if !report_settings_is_configured(&report_settings) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "llm_not_configured",
+            }),
+        )
+            .into_response();
+    }
+
+    let base_date = req
+        .week_start
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(date_local_today);
+    if !validate_yyyy_mm_dd(&base_date) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "invalid_week_start",
+            }),
+        )
+            .into_response();
+    }
+
+    let Some(week_start) = start_of_week_monday(&base_date) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "invalid_week_start",
+            }),
+        )
+            .into_response();
+    };
+    let week_end = {
+        use chrono::{Duration, NaiveDate};
+        let parts: Vec<&str> = week_start.split('-').collect();
+        let y: i32 = parts[0].parse().unwrap_or(1970);
+        let m: u32 = parts[1].parse().unwrap_or(1);
+        let d: u32 = parts[2].parse().unwrap_or(1);
+        let day = NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        (day + Duration::days(6)).format("%Y-%m-%d").to_string()
+    };
+
+    let tz_offset_minutes = req
+        .tz_offset_minutes
+        .or_else(|| tz_offset_minutes_for_day_local(&week_start))
+        .unwrap_or(0)
+        .clamp(TZ_OFFSET_MINUTES_MIN, TZ_OFFSET_MINUTES_MAX);
+
+    let res = match generate_weekly_report(
+        &state,
+        &report_settings,
+        &week_start,
+        &week_end,
+        tz_offset_minutes,
+        req.force,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            error!("generate_weekly_report failed: {err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "internal_error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    Json(OkResponse {
+        ok: true,
+        data: Some(res),
+    })
+    .into_response()
+}
+
+async fn get_report_by_id(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "invalid_id",
+            }),
+        )
+            .into_response();
+    }
+
+    let mut conn = state.conn.lock().await;
+    match get_report(&mut conn, &id) {
+        Ok(Some(r)) => Json(OkResponse { ok: true, data: Some(r) }).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrResponse {
+                ok: false,
+                error: "not_found",
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            error!("get_report failed: {err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "db_error",
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn post_report(State(state): State<AppState>, Json(req): Json<ReportUpsert>) -> Response {
+    let id = req.id.trim().to_string();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "invalid_id",
+            }),
+        )
+            .into_response();
+    }
+    let kind = req.kind.trim().to_string();
+    if !validate_report_kind(&kind) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "invalid_kind",
+            }),
+        )
+            .into_response();
+    }
+    let start = req.period_start.trim().to_string();
+    let end = req.period_end.trim().to_string();
+    if !validate_yyyy_mm_dd(&start) || !validate_yyyy_mm_dd(&end) || end < start {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "invalid_period",
+            }),
+        )
+            .into_response();
+    }
+
+    let generated_at = req
+        .generated_at
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default());
+
+    let record = ReportRecord {
+        id: id.clone(),
+        kind,
+        period_start: start,
+        period_end: end,
+        generated_at,
+        provider_url: req.provider_url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        model: req.model.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        prompt: req.prompt,
+        input_json: req.input_json,
+        output_md: req.output_md,
+        error: req.error,
+    };
+
+    let mut conn = state.conn.lock().await;
+    if let Err(err) = upsert_report(&mut conn, &record) {
+        error!("upsert_report failed: {err}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrResponse {
+                ok: false,
+                error: "db_error",
+            }),
+        )
+            .into_response();
+    }
+
+    match get_report(&mut conn, &id) {
+        Ok(Some(r)) => Json(OkResponse { ok: true, data: Some(r) }).into_response(),
+        Ok(None) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrResponse {
+                ok: false,
+                error: "db_error",
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            error!("get_report after upsert failed: {err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "db_error",
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn delete_report(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrResponse {
+                ok: false,
+                error: "invalid_id",
+            }),
+        )
+            .into_response();
+    }
+    let mut conn = state.conn.lock().await;
+    match delete_report_by_id(&mut conn, &id) {
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrResponse {
+                ok: false,
+                error: "not_found",
+            }),
+        )
+            .into_response(),
+        Ok(_) => Json(OkResponse::<Value> { ok: true, data: None }).into_response(),
+        Err(err) => {
+            error!("delete_report_by_id failed: {err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrResponse {
+                    ok: false,
+                    error: "db_error",
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+fn blocked_sets(rules: &[PrivacyRuleRow]) -> (HashSet<String>, HashSet<String>) {
+    let mut apps: HashSet<String> = HashSet::new();
+    let mut domains: HashSet<String> = HashSet::new();
+    for r in rules {
+        if r.action != "drop" {
+            continue;
+        }
+        if r.kind == "app" {
+            let v = r.value.trim();
+            if !v.is_empty() {
+                apps.insert(v.to_string());
+            }
+        } else if r.kind == "domain" {
+            let v = r.value.trim().to_lowercase();
+            if !v.is_empty() {
+                domains.insert(v);
+            }
+        }
+    }
+    (apps, domains)
+}
+
+fn block_summary_is_reviewed(b: &BlockSummary) -> bool {
+    let Some(r) = &b.review else {
+        return false;
+    };
+    block_is_reviewed(r)
+}
+
+fn render_prompt_template(template: &str, vars: &[(&str, &str)], json_text: &str) -> String {
+    let mut out = template.to_string();
+    for (k, v) in vars {
+        out = out.replace(&format!("{{{{{k}}}}}"), v);
+    }
+    if out.contains("{{json}}") {
+        out = out.replace("{{json}}", json_text);
+        return out;
+    }
+    format!("{out}\n\nInput JSON:\n{json_text}")
+}
+
+async fn openai_chat_completions_markdown(
+    cfg: &ReportSettings,
+    prompt: &str,
+    max_tokens: i64,
+) -> anyhow::Result<String> {
+    let base = cfg.api_base_url.trim().trim_end_matches('/');
+    let url = format!("{base}/chat/completions");
+    let api_key = cfg.api_key.trim();
+    let model = cfg.model.trim();
+
+    let body = json!({
+      "model": model,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a strict personal review assistant. Output only Markdown. Follow the user's instructions exactly.",
+        },
+        { "role": "user", "content": prompt },
+      ],
+      "temperature": 0.2,
+      "max_tokens": max_tokens,
+    });
+
+    let client = reqwest::Client::new();
+    let mut req = client
+        .post(url)
+        .header("content-type", "application/json")
+        .json(&body);
+    if !api_key.is_empty() {
+        req = req.bearer_auth(api_key);
+    }
+    let res = req.send().await?;
+    let status = res.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("http_{}", status.as_u16()));
+    }
+
+    let v: Value = res.json().await?;
+    let content = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c0| {
+            c0.get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        })
+        .or_else(|| {
+            // Some compat providers might still return `text`.
+            v.get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c0| c0.get("text"))
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        });
+
+    content.ok_or_else(|| anyhow::anyhow!("missing_content"))
+}
+
+fn resolve_reports_output_dir(state: &AppState, cfg: &ReportSettings) -> PathBuf {
+    if let Some(dir) = cfg.output_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    state.data_dir.join("reports")
+}
+
+fn atomic_write_text(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
+
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, content)?;
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+fn aggregate_top_from_segments(
+    segments: &[TimelineSegment],
+    store_titles: bool,
+    audio: bool,
+    blocked_apps: &HashSet<String>,
+    blocked_domains: &HashSet<String>,
+    limit: usize,
+) -> Vec<Value> {
+    #[derive(Clone)]
+    struct Acc {
+        kind: String,
+        entity: String,
+        label: String,
+        subtitle: Option<String>,
+        seconds: i64,
+        blocked: bool,
+        audio: bool,
+    }
+
+    let mut by_key: HashMap<String, Acc> = HashMap::new();
+
+    for s in segments {
+        let is_audio = s.activity.as_deref() == Some("audio");
+        if audio != is_audio {
+            continue;
+        }
+        if s.kind != "app" && s.kind != "domain" {
+            continue;
+        }
+        let raw_entity = s.entity.trim();
+        if raw_entity.is_empty() {
+            continue;
+        }
+        if s.seconds <= 0 {
+            continue;
+        }
+
+        if s.kind == "domain" {
+            let entity = raw_entity.to_lowercase();
+            let title_norm = s
+                .title
+                .as_deref()
+                .map(|t| normalize_web_title(&entity, t))
+                .unwrap_or_default();
+            let (label, subtitle, key) = if store_titles && !title_norm.trim().is_empty() {
+                let label = title_norm.trim().to_string();
+                let key = format!("domain|{entity}|{label}");
+                (label, Some(entity.clone()), key)
+            } else {
+                let label = display_entity(&entity);
+                let key = format!("domain|{entity}");
+                (label, None, key)
+            };
+            let blocked = is_blocked_domain(&entity, blocked_domains);
+
+            by_key
+                .entry(key)
+                .and_modify(|a| a.seconds += s.seconds)
+                .or_insert_with(|| Acc {
+                    kind: "domain".to_string(),
+                    entity,
+                    label,
+                    subtitle,
+                    seconds: s.seconds,
+                    blocked,
+                    audio,
+                });
+        } else {
+            let entity = raw_entity.to_string();
+            let label = display_entity(&entity);
+            let subtitle = if store_titles {
+                if is_browser_app(&entity) {
+                    None
+                } else {
+                    let t = s.title.as_deref().unwrap_or("").trim();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        let is_vscode = entity
+                            .rsplit(['\\', '/'])
+                            .next()
+                            .unwrap_or(entity.as_str())
+                            .eq_ignore_ascii_case("code.exe");
+                        if is_vscode {
+                            extract_vscode_workspace(t).map(|ws| format!("Workspace: {ws}")).or_else(|| Some(t.to_string()))
+                        } else {
+                            Some(t.to_string())
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            let blocked = blocked_apps.contains(&entity);
+            let key = format!("app|{entity}");
+
+            by_key
+                .entry(key)
+                .and_modify(|a| a.seconds += s.seconds)
+                .or_insert_with(|| Acc {
+                    kind: "app".to_string(),
+                    entity,
+                    label,
+                    subtitle,
+                    seconds: s.seconds,
+                    blocked,
+                    audio,
+                });
+        }
+    }
+
+    let mut items: Vec<Acc> = by_key.into_values().collect();
+    items.sort_by(|a, b| b.seconds.cmp(&a.seconds));
+    items.truncate(limit);
+
+    items
+        .into_iter()
+        .map(|it| {
+            json!({
+              "kind": it.kind,
+              "entity": it.entity,
+              "label": it.label,
+              "subtitle": it.subtitle,
+              "seconds": it.seconds,
+              "blocked": it.blocked,
+              "audio": it.audio,
+            })
+        })
+        .collect()
+}
+
+async fn generate_daily_report(
+    state: &AppState,
+    cfg: &ReportSettings,
+    date_local: &str,
+    tz_offset_minutes: i32,
+    force: bool,
+) -> anyhow::Result<ReportRecord> {
+    let date = date_local.trim();
+    let report_id = report_id_daily(date);
+
+    if !force {
+        let mut conn = state.conn.lock().await;
+        if let Ok(Some(existing)) = get_report(&mut conn, &report_id) {
+            if report_is_good(&existing) {
+                return Ok(existing);
+            }
+        }
+    }
+
+    let tz_offset = tz_offset_from_minutes(tz_offset_minutes);
+    let day_start = parse_day_start_utc_for_offset(date, tz_offset).map_err(|_| anyhow::anyhow!("invalid_date"))?;
+    let day_end = day_start + time::Duration::days(1);
+    let now = OffsetDateTime::now_utc().min(day_end);
+
+    // Load DB data needed for input JSON.
+    let (settings, rules, blocks, segments) = {
+        let settings = { *state.settings.lock().await };
+        let mut conn = state.conn.lock().await;
+        let rules = list_privacy_rules(&mut conn).unwrap_or_default();
+        let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+        let events = list_events_between(&mut conn, day_start, day_end, &privacy)?;
+        let blocks = attach_reviews(&mut conn, build_blocks(&events, settings, now))?;
+        let segments = build_timeline_segments(&events, settings, now);
+        (settings, rules, blocks, segments)
+    };
+
+    let focus_seconds: i64 = segments
+        .iter()
+        .filter(|s| s.activity.as_deref() != Some("audio"))
+        .map(|s| s.seconds)
+        .sum();
+    let audio_seconds: i64 = segments
+        .iter()
+        .filter(|s| s.activity.as_deref() == Some("audio"))
+        .map(|s| s.seconds)
+        .sum();
+
+    let reviewed = blocks
+        .iter()
+        .filter(|b| block_summary_is_reviewed(b))
+        .count() as i64;
+    let skipped = blocks.iter().filter(|b| b.review.as_ref().map(|r| r.skipped).unwrap_or(false)).count() as i64;
+    let pending = (blocks.len() as i64).saturating_sub(reviewed);
+
+    let last_activity_ts_local: Option<String> = segments
+        .iter()
+        .filter_map(|s| OffsetDateTime::parse(&s.end_ts, &Rfc3339).ok())
+        .max()
+        .map(|t| t.to_offset(tz_offset).format(&Rfc3339).unwrap_or_default());
+
+    let (blocked_apps, blocked_domains) = blocked_sets(&rules);
+    let mut blocked_apps_list: Vec<String> = blocked_apps.iter().cloned().collect();
+    blocked_apps_list.sort();
+    let mut blocked_domains_list: Vec<String> = blocked_domains.iter().cloned().collect();
+    blocked_domains_list.sort();
+    let top_focus = aggregate_top_from_segments(
+        &segments,
+        settings.store_titles,
+        false,
+        &blocked_apps,
+        &blocked_domains,
+        15,
+    );
+    let top_audio = aggregate_top_from_segments(
+        &segments,
+        settings.store_titles,
+        true,
+        &blocked_apps,
+        &blocked_domains,
+        10,
+    );
+
+    let top1_seconds = top_focus
+        .get(0)
+        .and_then(|v| v.get("seconds"))
+        .and_then(|n| n.as_i64())
+        .unwrap_or(0);
+    let top1_share = if focus_seconds <= 0 {
+        0.0
+    } else {
+        (top1_seconds as f64) / (focus_seconds as f64)
+    };
+
+    let blocks_json: Vec<Value> = blocks
+        .iter()
+        .map(|b| {
+            let top_items: Vec<Value> = b
+                .top_items
+                .iter()
+                .take(6)
+                .map(|it| {
+                    json!({
+                      "kind": it.kind,
+                      "entity": it.entity,
+                      "title": it.title,
+                      "seconds": it.seconds,
+                    })
+                })
+                .collect();
+
+            let bg_items: Vec<Value> = b
+                .background_top_items
+                .iter()
+                .take(4)
+                .map(|it| {
+                    json!({
+                      "kind": it.kind,
+                      "entity": it.entity,
+                      "title": it.title,
+                      "seconds": it.seconds,
+                    })
+                })
+                .collect();
+
+            let review = b.review.as_ref().map(|r| {
+                json!({
+                  "skipped": r.skipped,
+                  "skip_reason": r.skip_reason,
+                  "doing": r.doing,
+                  "output": r.output,
+                  "next": r.next,
+                  "tags": r.tags,
+                  "updated_at": r.updated_at,
+                })
+            });
+
+            json!({
+              "id": b.id,
+              "start_ts": b.start_ts,
+              "end_ts": b.end_ts,
+              "total_seconds": b.total_seconds,
+              "top_items": top_items,
+              "background_seconds": b.background_seconds,
+              "background_top_items": bg_items,
+              "review": review,
+            })
+        })
+        .collect();
+
+    let daily_csv = if cfg.save_csv {
+        Some(export_csv(date, &blocks))
+    } else {
+        None
+    };
+
+    let input = json!({
+      "schema": "recorderphone_report_v1",
+      "kind": "daily",
+      "date": date,
+      "tz_offset_minutes": tz_offset_minutes,
+      "privacy_level": privacy_level_label(settings),
+      "settings": {
+        "block_seconds": settings.block_seconds,
+        "idle_cutoff_seconds": settings.idle_cutoff_seconds,
+        "store_titles": settings.store_titles,
+        "store_exe_path": settings.store_exe_path,
+      },
+      "stats": {
+        "focus_seconds": focus_seconds,
+        "audio_seconds": audio_seconds,
+        "blocks_total": blocks.len(),
+        "blocks_reviewed": reviewed,
+        "blocks_pending": pending,
+        "blocks_skipped": skipped,
+        "top1_seconds": top1_seconds,
+        "top1_share": top1_share,
+        "last_activity_ts_local": last_activity_ts_local,
+      },
+      "blacklist": {
+        "apps": blocked_apps_list,
+        "domains": blocked_domains_list,
+      },
+      "top_focus": top_focus,
+      "top_audio": top_audio,
+      "blocks": blocks_json,
+    });
+
+    let input_json = serde_json::to_string_pretty(&input)?;
+    let prompt = render_prompt_template(&cfg.daily_prompt, &[("date", date)], &input_json);
+
+    let generated_at = OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default();
+    let provider_url = cfg.api_base_url.trim().to_string();
+    let model = cfg.model.trim().to_string();
+
+    match openai_chat_completions_markdown(cfg, &prompt, 1400).await {
+        Ok(output_md) => {
+            let record = ReportRecord {
+                id: report_id.clone(),
+                kind: "daily".to_string(),
+                period_start: date.to_string(),
+                period_end: date.to_string(),
+                generated_at,
+                provider_url: Some(provider_url),
+                model: Some(model),
+                prompt: Some(cfg.daily_prompt.clone()),
+                input_json: Some(input_json),
+                output_md: Some(output_md),
+                error: None,
+            };
+
+            {
+                let mut conn = state.conn.lock().await;
+                upsert_report(&mut conn, &record)?;
+            }
+            let out_dir = resolve_reports_output_dir(state, cfg);
+            if cfg.save_md {
+                let p = out_dir.join(format!("report-daily-{date}.md"));
+                if let Some(md) = record.output_md.as_deref() {
+                    if let Err(e) = atomic_write_text(&p, format!("{}\n", md.trim_end()).as_str())
+                    {
+                        error!("write report md failed: {e}");
+                    }
+                }
+            }
+            if let Some(csv) = daily_csv.as_deref() {
+                let p = out_dir.join(format!("report-daily-{date}.csv"));
+                if let Err(e) = atomic_write_text(&p, csv) {
+                    error!("write report csv failed: {e}");
+                }
+            }
+            Ok(record)
+        }
+        Err(e) => {
+            let err_s = e.to_string();
+            let mut conn = state.conn.lock().await;
+            let existing = get_report(&mut conn, &report_id).ok().flatten();
+            let record = ReportRecord {
+                id: report_id.clone(),
+                kind: "daily".to_string(),
+                period_start: date.to_string(),
+                period_end: date.to_string(),
+                generated_at,
+                provider_url: Some(provider_url),
+                model: Some(model),
+                prompt: Some(cfg.daily_prompt.clone()),
+                input_json: Some(input_json),
+                output_md: existing.and_then(|r| r.output_md),
+                error: Some(err_s),
+            };
+            upsert_report(&mut conn, &record)?;
+            drop(conn);
+
+            // Even if LLM fails, best-effort write the structured CSV if enabled.
+            if let Some(csv) = daily_csv.as_deref() {
+                let out_dir = resolve_reports_output_dir(state, cfg);
+                let p = out_dir.join(format!("report-daily-{date}.csv"));
+                if let Err(e) = atomic_write_text(&p, csv) {
+                    error!("write report csv failed: {e}");
+                }
+            }
+            Ok(record)
+        }
+    }
+}
+
+async fn generate_weekly_report(
+    state: &AppState,
+    cfg: &ReportSettings,
+    week_start_local: &str,
+    week_end_local: &str,
+    tz_offset_minutes: i32,
+    force: bool,
+) -> anyhow::Result<ReportRecord> {
+    let start = week_start_local.trim();
+    let end = week_end_local.trim();
+    let report_id = report_id_weekly(start, end);
+
+    if !force {
+        let mut conn = state.conn.lock().await;
+        if let Ok(Some(existing)) = get_report(&mut conn, &report_id) {
+            if report_is_good(&existing) {
+                return Ok(existing);
+            }
+        }
+    }
+
+    let settings = { *state.settings.lock().await };
+    let (blocked_apps, blocked_domains) = {
+        let mut conn = state.conn.lock().await;
+        let rules = list_privacy_rules(&mut conn).unwrap_or_default();
+        blocked_sets(&rules)
+    };
+    let mut blocked_apps_list: Vec<String> = blocked_apps.iter().cloned().collect();
+    blocked_apps_list.sort();
+    let mut blocked_domains_list: Vec<String> = blocked_domains.iter().cloned().collect();
+    blocked_domains_list.sort();
+
+    let mut weekly_csv = if cfg.save_csv {
+        Some(String::new())
+    } else {
+        None
+    };
+
+    // Build per-day summaries + collect segments for weekly top.
+    let mut daily: Vec<Value> = Vec::new();
+    let mut all_segments: Vec<TimelineSegment> = Vec::new();
+    let mut pending_blocks: Vec<Value> = Vec::new();
+
+    // Iterate 7 days starting from Monday.
+    use chrono::{Duration, NaiveDate};
+    let parts: Vec<&str> = start.split('-').collect();
+    let y: i32 = parts.get(0).and_then(|s| s.parse().ok()).ok_or_else(|| anyhow::anyhow!("invalid_week_start"))?;
+    let m: u32 = parts.get(1).and_then(|s| s.parse().ok()).ok_or_else(|| anyhow::anyhow!("invalid_week_start"))?;
+    let d: u32 = parts.get(2).and_then(|s| s.parse().ok()).ok_or_else(|| anyhow::anyhow!("invalid_week_start"))?;
+    let week_start_day = NaiveDate::from_ymd_opt(y, m, d).ok_or_else(|| anyhow::anyhow!("invalid_week_start"))?;
+
+    for i in 0..7 {
+        let day = week_start_day + Duration::days(i);
+        let date = day.format("%Y-%m-%d").to_string();
+        let day_tz_offset_minutes = tz_offset_minutes_for_day_local(&date).unwrap_or(tz_offset_minutes);
+        let tz_offset = tz_offset_from_minutes(day_tz_offset_minutes);
+        let day_start = parse_day_start_utc_for_offset(&date, tz_offset).map_err(|_| anyhow::anyhow!("invalid_date"))?;
+        let day_end = day_start + time::Duration::days(1);
+        let now = OffsetDateTime::now_utc().min(day_end);
+
+        let (blocks, segments) = {
+            let mut conn = state.conn.lock().await;
+            let privacy = PrivacyIndex::load(&mut conn).unwrap_or_default();
+            let events = list_events_between(&mut conn, day_start, day_end, &privacy)?;
+            let blocks = attach_reviews(&mut conn, build_blocks(&events, settings, now))?;
+            let segments = build_timeline_segments(&events, settings, now);
+            (blocks, segments)
+        };
+
+        if let Some(buf) = weekly_csv.as_mut() {
+            let day_csv = export_csv(&date, &blocks);
+            if buf.is_empty() {
+                buf.push_str(&day_csv);
+            } else if let Some(pos) = day_csv.find('\n') {
+                buf.push_str(&day_csv[(pos + 1)..]);
+            }
+        }
+
+        let focus_seconds: i64 = segments
+            .iter()
+            .filter(|s| s.activity.as_deref() != Some("audio"))
+            .map(|s| s.seconds)
+            .sum();
+        let audio_seconds: i64 = segments
+            .iter()
+            .filter(|s| s.activity.as_deref() == Some("audio"))
+            .map(|s| s.seconds)
+            .sum();
+        let reviewed = blocks
+            .iter()
+            .filter(|b| block_summary_is_reviewed(b))
+            .count() as i64;
+
+        let top1 = aggregate_top_from_segments(
+            &segments,
+            settings.store_titles,
+            false,
+            &blocked_apps,
+            &blocked_domains,
+            1,
+        );
+        let top1_label = top1
+            .get(0)
+            .and_then(|v| v.get("label"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let top1_seconds = top1
+            .get(0)
+            .and_then(|v| v.get("seconds"))
+            .and_then(|n| n.as_i64())
+            .unwrap_or(0);
+        let top1_share = if focus_seconds <= 0 {
+            0.0
+        } else {
+            (top1_seconds as f64) / (focus_seconds as f64)
+        };
+
+        daily.push(json!({
+          "date": date,
+          "focus_seconds": focus_seconds,
+          "audio_seconds": audio_seconds,
+          "blocks_total": blocks.len(),
+          "blocks_reviewed": reviewed,
+          "top1": top1_label,
+          "top1_share": top1_share,
+        }));
+
+        // Move segments into the weekly accumulator after all per-day stats are computed.
+        all_segments.extend(segments);
+
+        for b in blocks.iter() {
+            if block_summary_is_reviewed(b) {
+                continue;
+            }
+            if b.total_seconds < 5 * 60 {
+                continue;
+            }
+            let top = b.top_items.get(0).map(|it| {
+                if it.kind == "domain" {
+                    let title = it.title.as_deref().unwrap_or("").trim();
+                    if !title.is_empty() {
+                        normalize_web_title(&it.entity.to_lowercase(), title)
+                    } else {
+                        display_entity(&it.entity)
+                    }
+                } else {
+                    display_entity(&it.entity)
+                }
+            });
+
+            let time_range = format!(
+                "{}–{}",
+                fmt_hhmm(&b.start_ts, tz_offset),
+                fmt_hhmm(&b.end_ts, tz_offset)
+            );
+            pending_blocks.push(json!({
+              "date": date,
+              "block_id": b.id,
+              "time_range": time_range,
+              "top_focus": top,
+              "focus_seconds": b.total_seconds,
+            }));
+        }
+    }
+
+    // Weekly top focus.
+    let week_top = aggregate_top_from_segments(
+        &all_segments,
+        settings.store_titles,
+        false,
+        &blocked_apps,
+        &blocked_domains,
+        15,
+    );
+
+    let input = json!({
+      "schema": "recorderphone_report_v1",
+      "kind": "weekly",
+      "week_start": start,
+      "week_end": end,
+      "privacy_level": privacy_level_label(settings),
+      "settings": {
+        "block_seconds": settings.block_seconds,
+        "idle_cutoff_seconds": settings.idle_cutoff_seconds,
+        "store_titles": settings.store_titles,
+        "store_exe_path": settings.store_exe_path,
+      },
+      "blacklist": {
+        "apps": blocked_apps_list,
+        "domains": blocked_domains_list,
+      },
+      "daily": daily,
+      "top_focus_week": week_top,
+      "pending_blocks": pending_blocks.into_iter().take(10).collect::<Vec<_>>(),
+    });
+
+    let input_json = serde_json::to_string_pretty(&input)?;
+    let prompt = render_prompt_template(&cfg.weekly_prompt, &[("week_start", start), ("week_end", end)], &input_json);
+
+    let generated_at = OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default();
+    let provider_url = cfg.api_base_url.trim().to_string();
+    let model = cfg.model.trim().to_string();
+
+    match openai_chat_completions_markdown(cfg, &prompt, 1700).await {
+        Ok(output_md) => {
+            let record = ReportRecord {
+                id: report_id.clone(),
+                kind: "weekly".to_string(),
+                period_start: start.to_string(),
+                period_end: end.to_string(),
+                generated_at,
+                provider_url: Some(provider_url),
+                model: Some(model),
+                prompt: Some(cfg.weekly_prompt.clone()),
+                input_json: Some(input_json),
+                output_md: Some(output_md),
+                error: None,
+            };
+
+            {
+                let mut conn = state.conn.lock().await;
+                upsert_report(&mut conn, &record)?;
+            }
+
+            let out_dir = resolve_reports_output_dir(state, cfg);
+            if cfg.save_md {
+                let p = out_dir.join(format!("report-weekly-{start}_to_{end}.md"));
+                if let Some(md) = record.output_md.as_deref() {
+                    if let Err(e) = atomic_write_text(&p, format!("{}\n", md.trim_end()).as_str())
+                    {
+                        error!("write report md failed: {e}");
+                    }
+                }
+            }
+            if let Some(csv) = weekly_csv.as_deref() {
+                let p = out_dir.join(format!("report-weekly-{start}_to_{end}.csv"));
+                if let Err(e) = atomic_write_text(&p, csv) {
+                    error!("write report csv failed: {e}");
+                }
+            }
+            Ok(record)
+        }
+        Err(e) => {
+            let err_s = e.to_string();
+            let mut conn = state.conn.lock().await;
+            let existing = get_report(&mut conn, &report_id).ok().flatten();
+            let record = ReportRecord {
+                id: report_id.clone(),
+                kind: "weekly".to_string(),
+                period_start: start.to_string(),
+                period_end: end.to_string(),
+                generated_at,
+                provider_url: Some(provider_url),
+                model: Some(model),
+                prompt: Some(cfg.weekly_prompt.clone()),
+                input_json: Some(input_json),
+                output_md: existing.and_then(|r| r.output_md),
+                error: Some(err_s),
+            };
+            upsert_report(&mut conn, &record)?;
+            drop(conn);
+
+            // Best-effort CSV export even when LLM fails.
+            if let Some(csv) = weekly_csv.as_deref() {
+                let out_dir = resolve_reports_output_dir(state, cfg);
+                let p = out_dir.join(format!("report-weekly-{start}_to_{end}.csv"));
+                if let Err(e) = atomic_write_text(&p, csv) {
+                    error!("write report csv failed: {e}");
+                }
+            }
+            Ok(record)
+        }
+    }
+}
+
+async fn report_scheduler_loop(state: AppState) {
+    use chrono::{Datelike, Duration as ChronoDuration, Local, TimeZone, Timelike};
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+    use tokio::time::sleep;
+
+    let mut last_attempt: HashMap<String, Instant> = HashMap::new();
+    let tick = Duration::from_secs(30);
+
+    loop {
+        let cfg = { state.report_settings.lock().await.clone() };
+        if report_settings_is_configured(&cfg) {
+            // Daily: generate yesterday after local time >= daily_at_minutes.
+            if cfg.daily_enabled {
+                let now = Local::now();
+                let minutes_now = (now.hour() as i64) * 60 + (now.minute() as i64);
+                if minutes_now >= cfg.daily_at_minutes.clamp(0, 1439) {
+                    let target = (now - ChronoDuration::days(1)).format("%Y-%m-%d").to_string();
+                    let rid = report_id_daily(&target);
+
+                    let needs = {
+                        let mut conn = state.conn.lock().await;
+                        match get_report(&mut conn, &rid) {
+                            Ok(Some(r)) => !report_is_good(&r),
+                            Ok(None) => true,
+                            Err(_) => true,
+                        }
+                    };
+
+                    if needs {
+                        let cooldown = Duration::from_secs(60 * 60);
+                        let now_i = Instant::now();
+                        let throttled = last_attempt
+                            .get(&rid)
+                            .map(|t| now_i.duration_since(*t) < cooldown)
+                            .unwrap_or(false);
+                        if !throttled {
+                            last_attempt.insert(rid.clone(), now_i);
+                            let tz = tz_offset_minutes_for_day_local(&target).unwrap_or(0);
+                            let _ = generate_daily_report(&state, &cfg, &target, tz, false).await;
+                        }
+                    }
+                }
+            }
+
+            // Weekly: generate last week after local time >= (weekday + at_minutes) in current week.
+            if cfg.weekly_enabled {
+                let now = Local::now();
+                let weekday_now = now.weekday().number_from_monday() as i64; // 1..7
+                let start_of_week = now.date_naive() - ChronoDuration::days(weekday_now - 1);
+                let scheduled_weekday = (cfg.weekly_weekday as i64).clamp(1, 7);
+                let due_date = start_of_week + ChronoDuration::days(scheduled_weekday - 1);
+                let due_minutes = cfg.weekly_at_minutes.clamp(0, 1439);
+                let due_h = (due_minutes / 60) as u32;
+                let due_m = (due_minutes % 60) as u32;
+                let due_naive = match due_date.and_hms_opt(due_h, due_m, 0) {
+                    Some(v) => v,
+                    None => {
+                        sleep(tick).await;
+                        continue;
+                    }
+                };
+                let Some(due_local) = Local.from_local_datetime(&due_naive).single() else {
+                    sleep(tick).await;
+                    continue;
+                };
+
+                if now >= due_local {
+                    let last_week_start = start_of_week - ChronoDuration::days(7);
+                    let last_week_end = last_week_start + ChronoDuration::days(6);
+                    let start = last_week_start.format("%Y-%m-%d").to_string();
+                    let end = last_week_end.format("%Y-%m-%d").to_string();
+                    let rid = report_id_weekly(&start, &end);
+
+                    let needs = {
+                        let mut conn = state.conn.lock().await;
+                        match get_report(&mut conn, &rid) {
+                            Ok(Some(r)) => !report_is_good(&r),
+                            Ok(None) => true,
+                            Err(_) => true,
+                        }
+                    };
+
+                    if needs {
+                        let cooldown = Duration::from_secs(6 * 60 * 60);
+                        let now_i = Instant::now();
+                        let throttled = last_attempt
+                            .get(&rid)
+                            .map(|t| now_i.duration_since(*t) < cooldown)
+                            .unwrap_or(false);
+                        if !throttled {
+                            last_attempt.insert(rid.clone(), now_i);
+                            let tz = tz_offset_minutes_for_day_local(&start).unwrap_or(0);
+                            let _ =
+                                generate_weekly_report(&state, &cfg, &start, &end, tz, false).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        sleep(tick).await;
+    }
+}
+
 fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         r#"
@@ -2238,6 +4198,10 @@ CREATE TABLE IF NOT EXISTS block_reviews (
 	  idle_cutoff_seconds INTEGER NOT NULL,
 	  store_titles INTEGER NOT NULL DEFAULT 0,
 	  store_exe_path INTEGER NOT NULL DEFAULT 0,
+	  review_min_seconds INTEGER NOT NULL DEFAULT 300,
+	  review_notify_repeat_minutes INTEGER NOT NULL DEFAULT 10,
+	  review_notify_when_paused INTEGER NOT NULL DEFAULT 0,
+	  review_notify_when_idle INTEGER NOT NULL DEFAULT 0,
 	  updated_at TEXT NOT NULL
 	);
 
@@ -2260,6 +4224,48 @@ CREATE TABLE IF NOT EXISTS tracking_state (
 INSERT INTO tracking_state (id, paused, paused_until_ts, updated_at)
 VALUES (1, 0, NULL, '1970-01-01T00:00:00Z')
 ON CONFLICT(id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS report_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER NOT NULL DEFAULT 0,
+  api_base_url TEXT NOT NULL DEFAULT '',
+  api_key TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  daily_enabled INTEGER NOT NULL DEFAULT 0,
+  daily_at_minutes INTEGER NOT NULL DEFAULT 10,
+  daily_prompt TEXT NOT NULL DEFAULT '',
+  weekly_enabled INTEGER NOT NULL DEFAULT 0,
+  weekly_weekday INTEGER NOT NULL DEFAULT 1,
+  weekly_at_minutes INTEGER NOT NULL DEFAULT 20,
+  weekly_prompt TEXT NOT NULL DEFAULT '',
+  save_md INTEGER NOT NULL DEFAULT 1,
+  save_csv INTEGER NOT NULL DEFAULT 0,
+  output_dir TEXT,
+  updated_at TEXT NOT NULL
+);
+INSERT INTO report_settings (
+  id, enabled, api_base_url, api_key, model,
+  daily_enabled, daily_at_minutes, daily_prompt,
+  weekly_enabled, weekly_weekday, weekly_at_minutes, weekly_prompt,
+  save_md, save_csv, output_dir, updated_at
+)
+VALUES (1, 0, '', '', '', 0, 10, '', 0, 1, 20, '', 1, 0, NULL, '1970-01-01T00:00:00Z')
+ON CONFLICT(id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS reports (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  provider_url TEXT,
+  model TEXT,
+  prompt TEXT,
+  input_json TEXT,
+  output_md TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reports_kind_end ON reports(kind, period_end);
 "#,
     )?;
     ensure_app_settings_columns(conn)?;
@@ -2284,6 +4290,30 @@ fn ensure_app_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
     if !cols.contains("store_exe_path") {
         conn.execute(
             "ALTER TABLE app_settings ADD COLUMN store_exe_path INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !cols.contains("review_min_seconds") {
+        conn.execute(
+            "ALTER TABLE app_settings ADD COLUMN review_min_seconds INTEGER NOT NULL DEFAULT 300",
+            [],
+        )?;
+    }
+    if !cols.contains("review_notify_repeat_minutes") {
+        conn.execute(
+            "ALTER TABLE app_settings ADD COLUMN review_notify_repeat_minutes INTEGER NOT NULL DEFAULT 10",
+            [],
+        )?;
+    }
+    if !cols.contains("review_notify_when_paused") {
+        conn.execute(
+            "ALTER TABLE app_settings ADD COLUMN review_notify_when_paused INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !cols.contains("review_notify_when_idle") {
+        conn.execute(
+            "ALTER TABLE app_settings ADD COLUMN review_notify_when_idle INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
     }
@@ -2319,6 +4349,15 @@ fn load_or_init_settings(conn: &mut Connection, defaults: Settings) -> rusqlite:
             idle_cutoff_seconds: settings.idle_cutoff_seconds.max(10),
             store_titles: settings.store_titles,
             store_exe_path: settings.store_exe_path,
+            review_min_seconds: settings
+                .review_min_seconds
+                .clamp(REVIEW_MIN_SECONDS_MIN, REVIEW_MIN_SECONDS_MAX),
+            review_notify_repeat_minutes: settings.review_notify_repeat_minutes.clamp(
+                REVIEW_NOTIFY_REPEAT_MINUTES_MIN,
+                REVIEW_NOTIFY_REPEAT_MINUTES_MAX,
+            ),
+            review_notify_when_paused: settings.review_notify_when_paused,
+            review_notify_when_idle: settings.review_notify_when_idle,
         };
         if fixed != settings {
             let updated_at = OffsetDateTime::now_utc()
@@ -2334,6 +4373,15 @@ fn load_or_init_settings(conn: &mut Connection, defaults: Settings) -> rusqlite:
         idle_cutoff_seconds: defaults.idle_cutoff_seconds.max(10),
         store_titles: defaults.store_titles,
         store_exe_path: defaults.store_exe_path,
+        review_min_seconds: defaults
+            .review_min_seconds
+            .clamp(REVIEW_MIN_SECONDS_MIN, REVIEW_MIN_SECONDS_MAX),
+        review_notify_repeat_minutes: defaults.review_notify_repeat_minutes.clamp(
+            REVIEW_NOTIFY_REPEAT_MINUTES_MIN,
+            REVIEW_NOTIFY_REPEAT_MINUTES_MAX,
+        ),
+        review_notify_when_paused: defaults.review_notify_when_paused,
+        review_notify_when_idle: defaults.review_notify_when_idle,
     };
     let updated_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -2342,23 +4390,225 @@ fn load_or_init_settings(conn: &mut Connection, defaults: Settings) -> rusqlite:
     Ok(fixed)
 }
 
+fn load_or_init_report_settings(conn: &mut Connection) -> rusqlite::Result<ReportSettings> {
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
+    let defaults = ReportSettings::defaults(&now);
+
+    if let Some(settings) = load_report_settings(conn)? {
+        let fixed = ReportSettings {
+            enabled: settings.enabled,
+            api_base_url: {
+                let v = settings.api_base_url.trim();
+                if v.is_empty() {
+                    defaults.api_base_url.clone()
+                } else {
+                    v.to_string()
+                }
+            },
+            api_key: settings.api_key.trim().to_string(),
+            model: {
+                let v = settings.model.trim();
+                if v.is_empty() {
+                    defaults.model.clone()
+                } else {
+                    v.to_string()
+                }
+            },
+            daily_enabled: settings.daily_enabled,
+            daily_at_minutes: settings.daily_at_minutes.clamp(0, 1439),
+            daily_prompt: {
+                let v = settings.daily_prompt.trim();
+                if v.is_empty() {
+                    defaults.daily_prompt.clone()
+                } else {
+                    settings.daily_prompt.clone()
+                }
+            },
+            weekly_enabled: settings.weekly_enabled,
+            weekly_weekday: settings.weekly_weekday.clamp(1, 7),
+            weekly_at_minutes: settings.weekly_at_minutes.clamp(0, 1439),
+            weekly_prompt: {
+                let v = settings.weekly_prompt.trim();
+                if v.is_empty() {
+                    defaults.weekly_prompt.clone()
+                } else {
+                    settings.weekly_prompt.clone()
+                }
+            },
+            save_md: settings.save_md,
+            save_csv: settings.save_csv,
+            output_dir: settings
+                .output_dir
+                .as_deref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            updated_at: settings.updated_at.clone(),
+        };
+
+        if fixed != settings {
+            upsert_report_settings(conn, &fixed)?;
+            return Ok(fixed);
+        }
+
+        return Ok(settings);
+    }
+
+    upsert_report_settings(conn, &defaults)?;
+    Ok(defaults)
+}
+
 fn load_app_settings(conn: &mut Connection) -> rusqlite::Result<Option<Settings>> {
-    let mut stmt =
-        conn.prepare("SELECT block_seconds, idle_cutoff_seconds, store_titles, store_exe_path FROM app_settings WHERE id = 1")?;
+    let mut stmt = conn.prepare(
+        r#"
+SELECT
+  block_seconds,
+  idle_cutoff_seconds,
+  store_titles,
+  store_exe_path,
+  review_min_seconds,
+  review_notify_repeat_minutes,
+  review_notify_when_paused,
+  review_notify_when_idle
+FROM app_settings
+WHERE id = 1
+LIMIT 1
+"#,
+    )?;
     match stmt.query_row([], |row| {
         let store_titles: i64 = row.get(2)?;
         let store_exe_path: i64 = row.get(3)?;
+        let review_notify_when_paused: i64 = row.get(6)?;
+        let review_notify_when_idle: i64 = row.get(7)?;
         Ok(Settings {
             block_seconds: row.get(0)?,
             idle_cutoff_seconds: row.get(1)?,
             store_titles: store_titles != 0,
             store_exe_path: store_exe_path != 0,
+            review_min_seconds: row.get(4)?,
+            review_notify_repeat_minutes: row.get(5)?,
+            review_notify_when_paused: review_notify_when_paused != 0,
+            review_notify_when_idle: review_notify_when_idle != 0,
         })
     }) {
         Ok(v) => Ok(Some(v)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(err) => Err(err),
     }
+}
+
+fn load_report_settings(conn: &mut Connection) -> rusqlite::Result<Option<ReportSettings>> {
+    let mut stmt = conn.prepare(
+        r#"
+SELECT
+  enabled,
+  api_base_url,
+  api_key,
+  model,
+  daily_enabled,
+  daily_at_minutes,
+  daily_prompt,
+  weekly_enabled,
+  weekly_weekday,
+  weekly_at_minutes,
+  weekly_prompt,
+  save_md,
+  save_csv,
+  output_dir,
+  updated_at
+FROM report_settings
+WHERE id = 1
+LIMIT 1
+"#,
+    )?;
+
+    match stmt.query_row([], |row| {
+        let enabled: i64 = row.get(0)?;
+        let daily_enabled: i64 = row.get(4)?;
+        let weekly_enabled: i64 = row.get(7)?;
+        let save_md: i64 = row.get(11)?;
+        let save_csv: i64 = row.get(12)?;
+
+        Ok(ReportSettings {
+            enabled: enabled != 0,
+            api_base_url: row.get(1)?,
+            api_key: row.get(2)?,
+            model: row.get(3)?,
+            daily_enabled: daily_enabled != 0,
+            daily_at_minutes: row.get(5)?,
+            daily_prompt: row.get(6)?,
+            weekly_enabled: weekly_enabled != 0,
+            weekly_weekday: row.get(8)?,
+            weekly_at_minutes: row.get(9)?,
+            weekly_prompt: row.get(10)?,
+            save_md: save_md != 0,
+            save_csv: save_csv != 0,
+            output_dir: row.get(13)?,
+            updated_at: row.get(14)?,
+        })
+    }) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn upsert_report_settings(conn: &mut Connection, s: &ReportSettings) -> rusqlite::Result<()> {
+    conn.execute(
+        r#"
+INSERT INTO report_settings (
+  id,
+  enabled, api_base_url, api_key, model,
+  daily_enabled, daily_at_minutes, daily_prompt,
+  weekly_enabled, weekly_weekday, weekly_at_minutes, weekly_prompt,
+  save_md, save_csv, output_dir,
+  updated_at
+)
+VALUES (
+  1,
+  ?1, ?2, ?3, ?4,
+  ?5, ?6, ?7,
+  ?8, ?9, ?10, ?11,
+  ?12, ?13, ?14,
+  ?15
+)
+ON CONFLICT(id) DO UPDATE SET
+  enabled=excluded.enabled,
+  api_base_url=excluded.api_base_url,
+  api_key=excluded.api_key,
+  model=excluded.model,
+  daily_enabled=excluded.daily_enabled,
+  daily_at_minutes=excluded.daily_at_minutes,
+  daily_prompt=excluded.daily_prompt,
+  weekly_enabled=excluded.weekly_enabled,
+  weekly_weekday=excluded.weekly_weekday,
+  weekly_at_minutes=excluded.weekly_at_minutes,
+  weekly_prompt=excluded.weekly_prompt,
+  save_md=excluded.save_md,
+  save_csv=excluded.save_csv,
+  output_dir=excluded.output_dir,
+  updated_at=excluded.updated_at
+"#,
+        (
+            if s.enabled { 1i64 } else { 0i64 },
+            s.api_base_url.trim(),
+            s.api_key.trim(),
+            s.model.trim(),
+            if s.daily_enabled { 1i64 } else { 0i64 },
+            s.daily_at_minutes.clamp(0, 1439),
+            s.daily_prompt.as_str(),
+            if s.weekly_enabled { 1i64 } else { 0i64 },
+            s.weekly_weekday.clamp(1, 7),
+            s.weekly_at_minutes.clamp(0, 1439),
+            s.weekly_prompt.as_str(),
+            if s.save_md { 1i64 } else { 0i64 },
+            if s.save_csv { 1i64 } else { 0i64 },
+            s.output_dir.as_deref(),
+            s.updated_at.as_str(),
+        ),
+    )?;
+    Ok(())
 }
 
 fn upsert_app_settings(
@@ -2368,13 +4618,28 @@ fn upsert_app_settings(
 ) -> rusqlite::Result<()> {
     conn.execute(
         r#"
-INSERT INTO app_settings (id, block_seconds, idle_cutoff_seconds, store_titles, store_exe_path, updated_at)
-VALUES (1, ?1, ?2, ?3, ?4, ?5)
+INSERT INTO app_settings (
+  id,
+  block_seconds,
+  idle_cutoff_seconds,
+  store_titles,
+  store_exe_path,
+  review_min_seconds,
+  review_notify_repeat_minutes,
+  review_notify_when_paused,
+  review_notify_when_idle,
+  updated_at
+)
+VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
 ON CONFLICT(id) DO UPDATE SET
   block_seconds=excluded.block_seconds,
   idle_cutoff_seconds=excluded.idle_cutoff_seconds,
   store_titles=excluded.store_titles,
   store_exe_path=excluded.store_exe_path,
+  review_min_seconds=excluded.review_min_seconds,
+  review_notify_repeat_minutes=excluded.review_notify_repeat_minutes,
+  review_notify_when_paused=excluded.review_notify_when_paused,
+  review_notify_when_idle=excluded.review_notify_when_idle,
   updated_at=excluded.updated_at
         "#,
         (
@@ -2382,6 +4647,10 @@ ON CONFLICT(id) DO UPDATE SET
             settings.idle_cutoff_seconds,
             settings.store_titles as i64,
             settings.store_exe_path as i64,
+            settings.review_min_seconds,
+            settings.review_notify_repeat_minutes,
+            if settings.review_notify_when_paused { 1i64 } else { 0i64 },
+            if settings.review_notify_when_idle { 1i64 } else { 0i64 },
             updated_at,
         ),
     )?;
@@ -2463,6 +4732,139 @@ ON CONFLICT(kind, value) DO UPDATE SET
 
 fn delete_privacy_rule_by_id(conn: &mut Connection, id: i64) -> rusqlite::Result<usize> {
     conn.execute("DELETE FROM privacy_rules WHERE id = ?1", [id])
+}
+
+fn list_reports(conn: &mut Connection, limit: usize) -> rusqlite::Result<Vec<ReportSummary>> {
+    let mut stmt = conn.prepare(
+        r#"
+SELECT
+  id,
+  kind,
+  period_start,
+  period_end,
+  generated_at,
+  provider_url,
+  model,
+  output_md,
+  error
+FROM reports
+ORDER BY period_end DESC, generated_at DESC
+LIMIT ?1
+"#,
+    )?;
+
+    let rows = stmt.query_map([limit as i64], |row| {
+        let output_md: Option<String> = row.get(7)?;
+        let error: Option<String> = row.get(8)?;
+        let has_output = output_md
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        let has_error = error
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+
+        Ok(ReportSummary {
+            id: row.get(0)?,
+            kind: row.get(1)?,
+            period_start: row.get(2)?,
+            period_end: row.get(3)?,
+            generated_at: row.get(4)?,
+            provider_url: row.get(5)?,
+            model: row.get(6)?,
+            has_output,
+            has_error,
+        })
+    })?;
+
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+fn get_report(conn: &mut Connection, id: &str) -> rusqlite::Result<Option<ReportRecord>> {
+    let mut stmt = conn.prepare(
+        r#"
+SELECT
+  id,
+  kind,
+  period_start,
+  period_end,
+  generated_at,
+  provider_url,
+  model,
+  prompt,
+  input_json,
+  output_md,
+  error
+FROM reports
+WHERE id = ?1
+LIMIT 1
+"#,
+    )?;
+    match stmt.query_row([id], |row| {
+        Ok(ReportRecord {
+            id: row.get(0)?,
+            kind: row.get(1)?,
+            period_start: row.get(2)?,
+            period_end: row.get(3)?,
+            generated_at: row.get(4)?,
+            provider_url: row.get(5)?,
+            model: row.get(6)?,
+            prompt: row.get(7)?,
+            input_json: row.get(8)?,
+            output_md: row.get(9)?,
+            error: row.get(10)?,
+        })
+    }) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn upsert_report(conn: &mut Connection, r: &ReportRecord) -> rusqlite::Result<()> {
+    conn.execute(
+        r#"
+INSERT INTO reports (
+  id, kind, period_start, period_end, generated_at,
+  provider_url, model, prompt, input_json, output_md, error
+)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+ON CONFLICT(id) DO UPDATE SET
+  kind=excluded.kind,
+  period_start=excluded.period_start,
+  period_end=excluded.period_end,
+  generated_at=excluded.generated_at,
+  provider_url=excluded.provider_url,
+  model=excluded.model,
+  prompt=excluded.prompt,
+  input_json=excluded.input_json,
+  output_md=excluded.output_md,
+  error=excluded.error
+"#,
+        (
+            &r.id,
+            &r.kind,
+            &r.period_start,
+            &r.period_end,
+            &r.generated_at,
+            r.provider_url.as_deref(),
+            r.model.as_deref(),
+            r.prompt.as_deref(),
+            r.input_json.as_deref(),
+            r.output_md.as_deref(),
+            r.error.as_deref(),
+        ),
+    )?;
+    Ok(())
+}
+
+fn delete_report_by_id(conn: &mut Connection, id: &str) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM reports WHERE id = ?1", [id])
 }
 
 fn privacy_action_for_event(
@@ -3697,6 +6099,10 @@ mod tests {
             idle_cutoff_seconds: 10 * 60,
             store_titles: false,
             store_exe_path: false,
+            review_min_seconds: DEFAULT_REVIEW_MIN_SECONDS,
+            review_notify_repeat_minutes: DEFAULT_REVIEW_NOTIFY_REPEAT_MINUTES,
+            review_notify_when_paused: false,
+            review_notify_when_idle: false,
         };
         let blocks = build_blocks(&events, settings, m(5));
         assert_eq!(blocks.len(), 1);
@@ -3755,6 +6161,10 @@ mod tests {
             idle_cutoff_seconds: 10 * 60,
             store_titles: true,
             store_exe_path: false,
+            review_min_seconds: DEFAULT_REVIEW_MIN_SECONDS,
+            review_notify_repeat_minutes: DEFAULT_REVIEW_NOTIFY_REPEAT_MINUTES,
+            review_notify_when_paused: false,
+            review_notify_when_idle: false,
         };
         let blocks = build_blocks(&events, settings, m(3));
         assert_eq!(blocks.len(), 1);

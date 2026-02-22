@@ -967,7 +967,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "clap",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

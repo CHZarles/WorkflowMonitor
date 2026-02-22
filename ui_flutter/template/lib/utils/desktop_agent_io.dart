@@ -15,6 +15,20 @@ class _HealthInfo {
   final String? version;
 }
 
+class _CoreSettingsLite {
+  const _CoreSettingsLite({
+    this.idleCutoffSeconds,
+    this.reviewNotifyRepeatMinutes,
+    this.reviewNotifyWhenPaused,
+    this.reviewNotifyWhenIdle,
+  });
+
+  final int? idleCutoffSeconds;
+  final int? reviewNotifyRepeatMinutes;
+  final bool? reviewNotifyWhenPaused;
+  final bool? reviewNotifyWhenIdle;
+}
+
 class _AgentBinaries {
   const _AgentBinaries({
     required this.mode,
@@ -167,6 +181,64 @@ class _IoDesktopAgent implements DesktopAgent {
     }
   }
 
+  Future<_CoreSettingsLite?> _coreSettingsLite(String coreUrl) async {
+    Uri base;
+    try {
+      base = Uri.parse(coreUrl.trim());
+    } catch (_) {
+      return null;
+    }
+
+    final u = base.replace(path: "/settings", queryParameters: null, fragment: "");
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final req = await client.getUrl(u).timeout(const Duration(seconds: 3));
+      final res = await req.close().timeout(const Duration(seconds: 3));
+      if (res.statusCode != 200) return null;
+      final text = await res.transform(utf8.decoder).join();
+      final obj = jsonDecode(text);
+      if (obj is! Map) return null;
+
+      Map? data;
+      if (obj["data"] is Map) {
+        data = obj["data"] as Map;
+      } else {
+        data = obj;
+      }
+
+      int? i(String key) {
+        final v = data?[key];
+        if (v is int) return v;
+        if (v is num) return v.toInt();
+        if (v is String) return int.tryParse(v.trim());
+        return null;
+      }
+
+      bool? b(String key) {
+        final v = data?[key];
+        if (v is bool) return v;
+        if (v is int) return v != 0;
+        if (v is String) {
+          final s = v.trim().toLowerCase();
+          if (s == "true" || s == "1" || s == "yes" || s == "on") return true;
+          if (s == "false" || s == "0" || s == "no" || s == "off") return false;
+        }
+        return null;
+      }
+
+      return _CoreSettingsLite(
+        idleCutoffSeconds: i("idle_cutoff_seconds"),
+        reviewNotifyRepeatMinutes: i("review_notify_repeat_minutes"),
+        reviewNotifyWhenPaused: b("review_notify_when_paused"),
+        reviewNotifyWhenIdle: b("review_notify_when_idle"),
+      );
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<bool> _waitCoreHealthy(String coreUrl, {Duration timeout = const Duration(seconds: 15)}) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
@@ -303,11 +375,21 @@ class _IoDesktopAgent implements DesktopAgent {
 
     int? collectorPid;
     try {
+      final cfg = await _coreSettingsLite(coreUrl);
+      final idleCutoffSeconds = cfg?.idleCutoffSeconds;
+      final repeatMinutes = cfg?.reviewNotifyRepeatMinutes;
+      final notifyWhenPaused = cfg?.reviewNotifyWhenPaused ?? false;
+      final notifyWhenIdle = cfg?.reviewNotifyWhenIdle ?? false;
+
       final args = <String>[
         "--core-url",
         coreUrl,
+        if (idleCutoffSeconds != null && idleCutoffSeconds > 0) "--idle-cutoff-seconds=$idleCutoffSeconds",
         "--track-audio=${trackAudio ? 'true' : 'false'}",
         "--review-notify=${reviewNotify ? 'true' : 'false'}",
+        if (repeatMinutes != null && repeatMinutes > 0) "--review-notify-repeat-minutes=$repeatMinutes",
+        "--review-notify-when-paused=${notifyWhenPaused ? 'true' : 'false'}",
+        "--review-notify-when-idle=${notifyWhenIdle ? 'true' : 'false'}",
       ];
       if (sendTitle) args.add("--send-title");
 

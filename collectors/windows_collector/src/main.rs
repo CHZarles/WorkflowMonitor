@@ -36,6 +36,18 @@ struct Args {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     review_notify: bool,
 
+    /// Still show review notifications even when tracking is paused.
+    ///
+    /// Default is off (do not notify when paused).
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    review_notify_when_paused: bool,
+
+    /// Still show review notifications even when the machine is idle.
+    ///
+    /// Default is off (do not notify when idle).
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    review_notify_when_idle: bool,
+
     /// Review notification poll interval (seconds).
     #[arg(long, default_value_t = 30)]
     review_notify_check_seconds: u64,
@@ -279,7 +291,7 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
             }
         }
 
-        if args.review_notify && idle_s < args.idle_cutoff_seconds {
+        if args.review_notify && (args.review_notify_when_idle || idle_s < args.idle_cutoff_seconds) {
             let check_due = last_review_check.elapsed()
                 >= Duration::from_secs(args.review_notify_check_seconds);
             if check_due {
@@ -288,6 +300,7 @@ async fn windows_main(args: Args) -> anyhow::Result<()> {
                     &client,
                     args.core_url.trim_end_matches('/'),
                     args.review_notify_repeat_minutes,
+                    args.review_notify_when_paused,
                     &mut last_review_notified_block_id,
                     &mut review_snooze_until,
                 )
@@ -317,8 +330,19 @@ impl Drop for MutexGuard {
 #[cfg(windows)]
 fn ensure_single_instance_mutex() -> anyhow::Result<MutexGuard> {
     use std::iter;
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
-    use windows_sys::Win32::System::Threading::CreateMutexW;
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::{GetLastError, BOOL, ERROR_ALREADY_EXISTS, HANDLE};
+
+    // Use a direct kernel32 binding instead of relying on windows-sys re-exports.
+    // Some toolchains/locks may end up with a windows-sys build that doesn't expose CreateMutexW.
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateMutexW(
+            lp_mutex_attributes: *const c_void,
+            b_initial_owner: BOOL,
+            lp_name: *const u16,
+        ) -> HANDLE;
+    }
 
     let name: Vec<u16> = "Local\\RecorderPhone.windows_collector"
         .encode_utf16()
@@ -326,7 +350,7 @@ fn ensure_single_instance_mutex() -> anyhow::Result<MutexGuard> {
         .collect();
 
     unsafe {
-        let h = CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr());
+        let h = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
         if h == std::ptr::null_mut() {
             anyhow::bail!("CreateMutexW_failed");
         }
@@ -344,6 +368,7 @@ async fn maybe_notify_due_review_block(
     client: &reqwest::Client,
     base_url: &str,
     repeat_minutes: u64,
+    notify_when_paused: bool,
     last_block_id: &mut Option<String>,
     snooze_until: &mut Option<std::time::Instant>,
 ) -> anyhow::Result<()> {
@@ -476,7 +501,7 @@ async fn maybe_notify_due_review_block(
     }
 
     let tracking: TrackingStatus = get_ok(client, &format!("{base_url}/tracking/status")).await?;
-    if tracking.paused {
+    if tracking.paused && !notify_when_paused {
         return Ok(());
     }
 

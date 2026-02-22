@@ -36,6 +36,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _dateLocal;
   late final TextEditingController _blockMinutes;
   late final TextEditingController _idleCutoffMinutes;
+  late final TextEditingController _reviewMinMinutes;
+  late final TextEditingController _reviewToastRepeatMinutes;
   late final TextEditingController _ruleQuery;
   _RuleFilter _ruleFilter = _RuleFilter.all;
 
@@ -48,10 +50,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _coreSettingsSaving = false;
   bool _coreNumbersSaving = false;
   bool _privacySaving = false;
+  bool _reviewSaving = false;
+  Timer? _reviewSaveDebounce;
   String? _coreSettingsError;
   CoreSettings? _coreSettings;
   bool _storeTitles = false;
   bool _storeExePath = false;
+  bool _reviewNotifyWhenPaused = false;
+  bool _reviewNotifyWhenIdle = false;
 
   bool _rulesLoading = false;
   String? _rulesError;
@@ -81,6 +87,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _dateLocal = TextEditingController(text: _todayLocal());
     _blockMinutes = TextEditingController(text: "45");
     _idleCutoffMinutes = TextEditingController(text: "5");
+    _reviewMinMinutes = TextEditingController(text: "5");
+    _reviewToastRepeatMinutes = TextEditingController(text: "10");
     _ruleQuery = TextEditingController();
     _refreshAll();
     _loadAgentInfo();
@@ -216,6 +224,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _dateLocal.dispose();
     _blockMinutes.dispose();
     _idleCutoffMinutes.dispose();
+    _reviewMinMinutes.dispose();
+    _reviewToastRepeatMinutes.dispose();
+    _reviewSaveDebounce?.cancel();
     _ruleQuery.dispose();
     super.dispose();
   }
@@ -229,6 +240,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _refreshAll() async {
+    await widget.client.waitUntilHealthy(
+      timeout: _isLocalServerUrl()
+          ? const Duration(seconds: 15)
+          : const Duration(seconds: 6),
+    );
     await Future.wait([_checkHealth(), _loadCoreSettings(), _loadRules(), _loadNow(), _loadEvents()]);
   }
 
@@ -274,6 +290,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _coreSettings = s;
         _blockMinutes.text = _minsFromSeconds(s.blockSeconds).toString();
         _idleCutoffMinutes.text = _minsFromSeconds(s.idleCutoffSeconds).toString();
+        _reviewMinMinutes.text = _minsFromSeconds(s.reviewMinSeconds).toString();
+        _reviewToastRepeatMinutes.text = s.reviewNotifyRepeatMinutes.toString();
+        _reviewNotifyWhenPaused = s.reviewNotifyWhenPaused;
+        _reviewNotifyWhenIdle = s.reviewNotifyWhenIdle;
         _storeTitles = s.storeTitles;
         _storeExePath = s.storeExePath;
       });
@@ -379,6 +399,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final expectedBlock = _minsFromSeconds(s.blockSeconds).toString();
     final expectedIdle = _minsFromSeconds(s.idleCutoffSeconds).toString();
     return _blockMinutes.text.trim() != expectedBlock || _idleCutoffMinutes.text.trim() != expectedIdle;
+  }
+
+  bool _reviewDirty() {
+    final s = _coreSettings;
+    if (s == null) return false;
+    final expectedMin = _minsFromSeconds(s.reviewMinSeconds).toString();
+    final expectedRepeat = s.reviewNotifyRepeatMinutes.toString();
+    return _reviewMinMinutes.text.trim() != expectedMin ||
+        _reviewToastRepeatMinutes.text.trim() != expectedRepeat ||
+        _reviewNotifyWhenPaused != s.reviewNotifyWhenPaused ||
+        _reviewNotifyWhenIdle != s.reviewNotifyWhenIdle;
+  }
+
+  void _scheduleReviewSave({Duration delay = const Duration(milliseconds: 700)}) {
+    _reviewSaveDebounce?.cancel();
+    _reviewSaveDebounce = Timer(delay, () {
+      _saveReviewSettings().catchError((_) {});
+    });
+  }
+
+  Future<void> _saveReviewSettings() async {
+    if (_coreSettings == null) return;
+    if (_coreSettingsSaving) {
+      _scheduleReviewSave(delay: const Duration(milliseconds: 400));
+      return;
+    }
+    if (!_reviewDirty()) return;
+
+    final minM = int.tryParse(_reviewMinMinutes.text.trim());
+    final repeatM = int.tryParse(_reviewToastRepeatMinutes.text.trim());
+    if (minM == null || minM < 1) return;
+    if (repeatM == null || repeatM < 1) return;
+
+    setState(() {
+      _coreSettingsSaving = true;
+      _reviewSaving = true;
+      _coreSettingsError = null;
+    });
+
+    try {
+      final s = await widget.client.updateSettings(
+        reviewMinSeconds: (minM * 60).clamp(60, 4 * 60 * 60),
+        reviewNotifyRepeatMinutes: repeatM.clamp(1, 24 * 60),
+        reviewNotifyWhenPaused: _reviewNotifyWhenPaused,
+        reviewNotifyWhenIdle: _reviewNotifyWhenIdle,
+      );
+      if (!mounted) return;
+      setState(() {
+        _coreSettings = s;
+        _reviewMinMinutes.text = _minsFromSeconds(s.reviewMinSeconds).toString();
+        _reviewToastRepeatMinutes.text = s.reviewNotifyRepeatMinutes.toString();
+        _reviewNotifyWhenPaused = s.reviewNotifyWhenPaused;
+        _reviewNotifyWhenIdle = s.reviewNotifyWhenIdle;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _coreSettingsError = e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _coreSettingsSaving = false;
+          _reviewSaving = false;
+        });
+      }
+    }
   }
 
   _PrivacyLevel _privacyLevel() {
@@ -1425,6 +1510,80 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       );
                     },
+                  ),
+                  const SizedBox(height: RecorderTokens.space3),
+                  const Divider(),
+                  const SizedBox(height: RecorderTokens.space2),
+                  Text("Review reminders", style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: RecorderTokens.space2),
+                  TextField(
+                    controller: _reviewMinMinutes,
+                    enabled: !_coreSettingsSaving,
+                    decoration: const InputDecoration(
+                      labelText: "Min block duration to require review (minutes)",
+                      helperText: "Only blocks longer than this can become due (default 5m).",
+                    ),
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    onChanged: (_) => _scheduleReviewSave(),
+                  ),
+                  const SizedBox(height: RecorderTokens.space3),
+                  TextField(
+                    controller: _reviewToastRepeatMinutes,
+                    enabled: !_coreSettingsSaving,
+                    decoration: const InputDecoration(
+                      labelText: "Windows toast repeat interval (minutes)",
+                      helperText: "Minimum minutes between repeated notifications for the same block (default 10m).",
+                    ),
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    onChanged: (_) => _scheduleReviewSave(),
+                  ),
+                  const SizedBox(height: RecorderTokens.space2),
+                  SwitchListTile.adaptive(
+                    value: _reviewNotifyWhenPaused,
+                    onChanged: _coreSettingsSaving
+                        ? null
+                        : (v) {
+                            setState(() => _reviewNotifyWhenPaused = v);
+                            _scheduleReviewSave(delay: const Duration(milliseconds: 200));
+                          },
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text("Notify even when tracking is paused"),
+                    subtitle: const Text("Applies to Windows toast (collector)."),
+                  ),
+                  SwitchListTile.adaptive(
+                    value: _reviewNotifyWhenIdle,
+                    onChanged: _coreSettingsSaving
+                        ? null
+                        : (v) {
+                            setState(() => _reviewNotifyWhenIdle = v);
+                            _scheduleReviewSave(delay: const Duration(milliseconds: 200));
+                          },
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text("Notify even when PC is idle"),
+                    subtitle: const Text("Applies to Windows toast (collector)."),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: RecorderTokens.space1),
+                    child: Text(
+                      _reviewSaving ? "Saving review reminders…" : "Review reminder changes are saved automatically.",
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                  ),
+                  const SizedBox(height: RecorderTokens.space1),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      const SizedBox(width: RecorderTokens.space1),
+                      Expanded(
+                        child: Text(
+                          "Toast settings take effect after restarting the desktop agent / collector.",
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: RecorderTokens.space3),
                   const Divider(),

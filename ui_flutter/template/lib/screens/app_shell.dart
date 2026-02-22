@@ -7,6 +7,7 @@ import "package:window_manager/window_manager.dart";
 import "../api/core_client.dart";
 import "../utils/desktop_agent.dart";
 import "../utils/tray_controller.dart";
+import "reports_screen.dart";
 import "search_screen.dart";
 import "settings_screen.dart";
 import "today_screen.dart";
@@ -35,6 +36,7 @@ class _AppShellState extends State<AppShell> {
 
   final _todayKey = GlobalKey<TodayScreenState>();
   final _searchKey = GlobalKey<SearchScreenState>();
+  final _reportsKey = GlobalKey<ReportsScreenState>();
 
   bool _ready = false;
   int _index = 0;
@@ -79,6 +81,7 @@ class _AppShellState extends State<AppShell> {
   Future<void> _showAndFocusWindow() async {
     try {
       await windowManager.show();
+      await windowManager.restore();
       await windowManager.focus();
     } catch (_) {
       // ignore
@@ -121,9 +124,11 @@ class _AppShellState extends State<AppShell> {
         onQuickReview: () async {
           if (!mounted) return;
           setState(() => _index = 1);
-          _searchKey.currentState?.refresh(silent: true);
+          _searchKey.currentState?.refresh(silent: false);
         },
-        startHidden: widget.startMinimized && (widget.initialDeepLink == null || widget.initialDeepLink!.trim().isEmpty),
+        startHidden: widget.startMinimized &&
+            (widget.initialDeepLink == null ||
+                widget.initialDeepLink!.trim().isEmpty),
       ),
     );
 
@@ -147,7 +152,10 @@ class _AppShellState extends State<AppShell> {
     final uri = Uri.tryParse(_serverUrl.trim());
     if (uri == null) return false;
     final host = uri.host.trim().toLowerCase();
-    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+    return host == "127.0.0.1" ||
+        host == "localhost" ||
+        host == "0.0.0.0" ||
+        host == "::1";
   }
 
   Future<void> _maybeStartLocalAgent() async {
@@ -160,13 +168,17 @@ class _AppShellState extends State<AppShell> {
 
     // Always best-effort "ensure" Core + Collector are running locally.
     // This gives the one-click desktop experience in packaged mode.
-    final res = await agent.start(coreUrl: _serverUrl, restart: false, sendTitle: true);
+    final res =
+        await agent.start(coreUrl: _serverUrl, restart: false, sendTitle: true);
     if (!mounted) return;
     if (!res.ok) {
       final details = (res.message ?? "").trim();
       if (details.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(duration: const Duration(seconds: 6), showCloseIcon: true, content: Text("Agent start failed: $details")),
+          SnackBar(
+              duration: const Duration(seconds: 6),
+              showCloseIcon: true,
+              content: Text("Agent start failed: $details")),
         );
       }
       return;
@@ -174,7 +186,11 @@ class _AppShellState extends State<AppShell> {
 
     // Refresh tracking state after Core comes up.
     await _refreshTracking();
-    _todayKey.currentState?.refresh(silent: true, triggerReminder: true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _todayKey.currentState?.refresh(silent: true, triggerReminder: true);
+      _searchKey.currentState?.refresh(silent: true);
+      _reportsKey.currentState?.refresh(silent: true);
+    });
   }
 
   void _maybeHandleInitialDeepLink() {
@@ -190,10 +206,14 @@ class _AppShellState extends State<AppShell> {
     final uri = Uri.tryParse(raw.trim());
     if (uri == null || uri.scheme != "recorderphone") return;
 
-    final route = uri.host.isNotEmpty ? uri.host : (uri.pathSegments.isNotEmpty ? uri.pathSegments.first : "");
+    final route = uri.host.isNotEmpty
+        ? uri.host
+        : (uri.pathSegments.isNotEmpty ? uri.pathSegments.first : "");
     if (route != "review" && route != "quick-review") return;
 
-    final blockId = (uri.queryParameters["block"] ?? uri.queryParameters["block_id"])?.trim();
+    final blockId =
+        (uri.queryParameters["block"] ?? uri.queryParameters["block_id"])
+            ?.trim();
     final action = uri.queryParameters["action"]?.trim().toLowerCase();
 
     if (action == "skip") {
@@ -206,7 +226,8 @@ class _AppShellState extends State<AppShell> {
 
     if (action == "pause") {
       setState(() => _index = 0);
-      final minutes = int.tryParse((uri.queryParameters["minutes"] ?? "").trim());
+      final minutes =
+          int.tryParse((uri.queryParameters["minutes"] ?? "").trim());
       _pauseTrackingFromDeepLink(minutes: minutes);
       return;
     }
@@ -245,13 +266,17 @@ class _AppShellState extends State<AppShell> {
       final messenger = ScaffoldMessenger.of(context);
       messenger.clearSnackBars();
       messenger.showSnackBar(
-        const SnackBar(duration: Duration(seconds: 4), showCloseIcon: true, content: Text("Skipped the block")),
+        const SnackBar(
+            duration: Duration(seconds: 4),
+            showCloseIcon: true,
+            content: Text("Skipped the block")),
       );
       _todayKey.currentState?.refresh(silent: true, triggerReminder: false);
       _searchKey.currentState?.refresh(silent: true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Skip failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Skip failed: $e")));
     }
   }
 
@@ -264,12 +289,16 @@ class _AppShellState extends State<AppShell> {
       final messenger = ScaffoldMessenger.of(context);
       messenger.clearSnackBars();
       messenger.showSnackBar(
-        SnackBar(duration: const Duration(seconds: 4), showCloseIcon: true, content: Text(label)),
+        SnackBar(
+            duration: const Duration(seconds: 4),
+            showCloseIcon: true,
+            content: Text(label)),
       );
       _todayKey.currentState?.refresh(silent: true, triggerReminder: false);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Pause failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Pause failed: $e")));
     }
   }
 
@@ -281,12 +310,16 @@ class _AppShellState extends State<AppShell> {
       final messenger = ScaffoldMessenger.of(context);
       messenger.clearSnackBars();
       messenger.showSnackBar(
-        const SnackBar(duration: Duration(seconds: 4), showCloseIcon: true, content: Text("Resumed")),
+        const SnackBar(
+            duration: Duration(seconds: 4),
+            showCloseIcon: true,
+            content: Text("Resumed")),
       );
       _todayKey.currentState?.refresh(silent: true, triggerReminder: false);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Resume failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Resume failed: $e")));
     }
   }
 
@@ -327,7 +360,8 @@ class _AppShellState extends State<AppShell> {
                 child: const Text("Pause 1h"),
               ),
               SimpleDialogOption(
-                onPressed: () => Navigator.pop(ctx, _TrackingAction.pauseManual),
+                onPressed: () =>
+                    Navigator.pop(ctx, _TrackingAction.pauseManual),
                 child: const Text("Pause until resume"),
               ),
             ],
@@ -412,7 +446,7 @@ class _AppShellState extends State<AppShell> {
     }
 
     final isWide = MediaQuery.of(context).size.width >= 720;
-    final titles = ["Today", "Review", "Settings"];
+    final titles = ["Today", "Review", "Reports", "Settings"];
 
     final pages = [
       TodayScreen(
@@ -420,7 +454,7 @@ class _AppShellState extends State<AppShell> {
         client: _client,
         serverUrl: _serverUrl,
         onOpenReview: () => _setIndex(1),
-        onOpenSettings: () => _setIndex(2),
+        onOpenSettings: () => _setIndex(3),
         onOpenReviewQuery: (q, day) async {
           _setIndex(1);
           final review = _searchKey.currentState;
@@ -430,12 +464,24 @@ class _AppShellState extends State<AppShell> {
           }
         },
       ),
-      SearchScreen(key: _searchKey, client: _client, serverUrl: _serverUrl),
+      SearchScreen(
+        key: _searchKey,
+        client: _client,
+        serverUrl: _serverUrl,
+        isActive: _index == 1,
+      ),
+      ReportsScreen(
+        key: _reportsKey,
+        client: _client,
+        serverUrl: _serverUrl,
+        onOpenSettings: () => _setIndex(3),
+        isActive: _index == 2,
+      ),
       SettingsScreen(
         client: _client,
         serverUrl: _serverUrl,
         onServerUrlChanged: _setServerUrl,
-        isActive: _index == 2,
+        isActive: _index == 3,
       ),
     ];
 
@@ -465,6 +511,12 @@ class _AppShellState extends State<AppShell> {
           tooltip: "Refresh",
           icon: const Icon(Icons.refresh),
         ),
+      if (_index == 2)
+        IconButton(
+          onPressed: () => _reportsKey.currentState?.refresh(),
+          tooltip: "Refresh",
+          icon: const Icon(Icons.refresh),
+        ),
     ];
 
     if (isWide) {
@@ -486,6 +538,11 @@ class _AppShellState extends State<AppShell> {
                   icon: Icon(Icons.list_alt_outlined),
                   selectedIcon: Icon(Icons.list_alt),
                   label: Text("Review"),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.article_outlined),
+                  selectedIcon: Icon(Icons.article),
+                  label: Text("Reports"),
                 ),
                 NavigationRailDestination(
                   icon: Icon(Icons.settings_outlined),
@@ -517,6 +574,11 @@ class _AppShellState extends State<AppShell> {
             icon: Icon(Icons.list_alt_outlined),
             selectedIcon: Icon(Icons.list_alt),
             label: "Review",
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.article_outlined),
+            selectedIcon: Icon(Icons.article),
+            label: "Reports",
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
