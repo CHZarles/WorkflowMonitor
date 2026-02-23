@@ -223,7 +223,8 @@ powershell -ExecutionPolicy Bypass -File .\dev\package-windows.ps1 -InstallProto
 ```
 
 说明：
-- 该脚本会 best-effort 停掉正在运行的 `RecorderPhone.exe / recorder_core.exe / windows_collector.exe`，并清理输出目录后重新拷贝（避免“extra files / 拒绝访问”）。
+- 该脚本会（打包前/打包后）自动停止正在运行的 `RecorderPhone.exe / recorder_core.exe / windows_collector.exe`，避免文件占用导致“拒绝访问/无法覆盖/编译失败”。
+- 输出目录会生成 `build-info.json`（包含 git commit、core/collector 版本与 sha256），并会在打包完成后对 `recorder_core.exe/windows_collector.exe` 做 sha256 校验；校验失败会直接报错，避免你误跑到旧 core。
 - 若仍提示文件被占用：先退出 RecorderPhone（托盘里 Exit），或执行：`powershell -ExecutionPolicy Bypass -File .\dev\stop-agent.ps1 -KillAllByName`，再重试打包。
 
 产物目录：
