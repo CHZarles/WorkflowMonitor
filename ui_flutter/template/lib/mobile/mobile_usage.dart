@@ -17,9 +17,8 @@ class MobileUsage {
     for (final r in rows.take(topN)) {
       final sec = (r.foregroundMs / 1000).round();
       if (sec <= 0) continue;
-      out.add(MobileTopItem(id: r.packageName, seconds: sec));
+      out.add(MobileTopItem(id: r.packageName, label: r.label, seconds: sec));
     }
     return out;
   }
 }
-

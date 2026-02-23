@@ -1,7 +1,11 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
 
 import "../theme/tokens.dart";
+import "mobile_prefs.dart";
 import "mobile_store.dart";
+import "mobile_usage.dart";
 
 class MobileSettingsScreen extends StatefulWidget {
   const MobileSettingsScreen({super.key});
@@ -11,7 +15,55 @@ class MobileSettingsScreen extends StatefulWidget {
 }
 
 class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
+  late final TextEditingController _blockMinutes;
+  Timer? _saveDebounce;
+
+  bool _permLoading = false;
+  bool _usageAccess = false;
+
   bool _wiping = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _blockMinutes = TextEditingController(text: MobilePrefs.defaultBlockMinutes.toString());
+    _loadPrefsAndPerms();
+  }
+
+  @override
+  void dispose() {
+    _saveDebounce?.cancel();
+    _blockMinutes.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPrefsAndPerms() async {
+    setState(() => _permLoading = true);
+    try {
+      final bm = await MobilePrefs.getBlockMinutes();
+      final perm = await MobileUsage.instance.hasPermission();
+      if (!mounted) return;
+      setState(() {
+        _blockMinutes.text = bm.toString();
+        _usageAccess = perm;
+      });
+    } finally {
+      if (mounted) setState(() => _permLoading = false);
+    }
+  }
+
+  void _scheduleSaveBlockMinutes() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 650), () async {
+      final v = int.tryParse(_blockMinutes.text.trim());
+      if (v == null) return;
+      try {
+        await MobilePrefs.setBlockMinutes(v);
+      } catch (_) {
+        // ignore
+      }
+    });
+  }
 
   Future<void> _wipeAll() async {
     final ok = await showDialog<bool>(
@@ -46,6 +98,64 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
           Card(
             child: Padding(
               padding: const EdgeInsets.all(RecorderTokens.space4),
+              child: Row(
+                children: [
+                  Icon(_usageAccess ? Icons.check_circle_outline : Icons.lock_outline),
+                  const SizedBox(width: RecorderTokens.space3),
+                  Expanded(
+                    child: Text(
+                      _usageAccess ? "Usage Access: ON" : "Usage Access: OFF (required)",
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  const SizedBox(width: RecorderTokens.space3),
+                  OutlinedButton(
+                    onPressed: _permLoading
+                        ? null
+                        : () async {
+                            await MobileUsage.instance.openPermissionSettings();
+                          },
+                    child: const Text("Open"),
+                  ),
+                  const SizedBox(width: RecorderTokens.space2),
+                  IconButton(
+                    onPressed: _permLoading ? null : _loadPrefsAndPerms,
+                    icon: _permLoading
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.refresh),
+                    tooltip: "Refresh",
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: RecorderTokens.space4),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(RecorderTokens.space4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("Blocks", style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: RecorderTokens.space3),
+                  TextField(
+                    controller: _blockMinutes,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: "Block length (minutes)",
+                      helperText: "Default 45. Changing this affects newly generated blocks.",
+                    ),
+                    onChanged: (_) => _scheduleSaveBlockMinutes(),
+                    onSubmitted: (_) => _scheduleSaveBlockMinutes(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: RecorderTokens.space4),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(RecorderTokens.space4),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -65,4 +175,3 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
     );
   }
 }
-

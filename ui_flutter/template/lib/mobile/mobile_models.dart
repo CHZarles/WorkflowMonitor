@@ -1,16 +1,31 @@
 class MobileTopItem {
-  const MobileTopItem({required this.id, required this.seconds});
+  const MobileTopItem({
+    required this.id,
+    this.label,
+    required this.seconds,
+  });
 
   final String id; // packageName
+  final String? label;
   final int seconds;
 
-  Map<String, Object> toJson() => {"id": id, "seconds": seconds};
+  Map<String, Object?> toJson() => {"id": id, "label": label, "seconds": seconds};
+
+  String get displayName {
+    final v = (label ?? "").trim();
+    return v.isEmpty ? id : v;
+  }
 
   static MobileTopItem fromJson(Map obj) {
     final id = (obj["id"] ?? "").toString();
+    final labelRaw = (obj["label"] ?? "").toString().trim();
     final sRaw = obj["seconds"];
     final seconds = sRaw is int ? sRaw : int.tryParse(sRaw.toString()) ?? 0;
-    return MobileTopItem(id: id, seconds: seconds);
+    return MobileTopItem(
+      id: id,
+      label: labelRaw.isEmpty ? null : labelRaw,
+      seconds: seconds,
+    );
   }
 }
 
@@ -78,4 +93,3 @@ class MobileBlock {
   bool get reviewed => review != null && review!.skipped == false;
   bool get skipped => review?.skipped == true;
 }
-

@@ -78,7 +78,7 @@ class _MobileQuickReviewSheetState extends State<MobileQuickReviewSheet> {
     final start = DateTime.fromMillisecondsSinceEpoch(widget.block.startMs);
     final end = DateTime.fromMillisecondsSinceEpoch(widget.block.endMs);
     final title = "${formatHHMM(start.toUtc().toIso8601String())}–${formatHHMM(end.toUtc().toIso8601String())}";
-    final top = widget.block.topItems.take(3).map((it) => "${it.id} ${formatDuration(it.seconds)}").join(" · ");
+    final top = widget.block.topItems.take(3).map((it) => "${it.displayName} ${formatDuration(it.seconds)}").join(" · ");
 
     final skipped = widget.block.review?.skipped == true;
     final allTags = {..._presetTags, ..._tags}.toList();
@@ -180,4 +180,3 @@ class _MobileQuickReviewSheetState extends State<MobileQuickReviewSheet> {
     );
   }
 }
-

@@ -72,7 +72,7 @@ class _MobileReviewScreenState extends State<MobileReviewScreen> {
                     final end = DateTime.fromMillisecondsSinceEpoch(b.endMs);
                     final title =
                         "${formatHHMM(start.toUtc().toIso8601String())}–${formatHHMM(end.toUtc().toIso8601String())}";
-                    final sub = b.topItems.take(3).map((it) => "${it.id} ${formatDuration(it.seconds)}").join(" · ");
+                    final sub = b.topItems.take(3).map((it) => "${it.displayName} ${formatDuration(it.seconds)}").join(" · ");
                     return ListTile(
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(RecorderTokens.radius3)),
                       tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -86,4 +86,3 @@ class _MobileReviewScreenState extends State<MobileReviewScreen> {
     );
   }
 }
-

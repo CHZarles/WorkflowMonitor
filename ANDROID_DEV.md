@@ -1,64 +1,58 @@
-# Android（Flutter）开发与联调指南
+# Android（Flutter）开发与真机测试
 
 > 主路径 UI：`ui_flutter/template/` → 覆盖到你真实工程 `recorderphone_ui/`（见 `WINDOWS_DEV.md` / `ui_flutter/README.md`）。
+
+当前 Android 端是**独立本地模式**（不依赖桌面 Core）：
+- 采集：UsageStats（Usage Access）
+- 落盘：手机本地 SQLite（blocks + reviews）
+- 页面：Today / Review / Settings（移动端轻量版）
+
+---
 
 ## 1) 前置条件
 - 安装 Android Studio（含 Android SDK）
 - `flutter doctor -v` 里 Android toolchain 必须是 ✅
 
-## 2) Android 如何连到桌面 Core（最容易踩坑的点）
+---
 
-### 方案 A（推荐：真机 USB 调试 + `adb reverse`，最省事）
-让手机里访问 `http://127.0.0.1:17600` 时，实际转发到你的开发机端口。
+## 2) 连接手机（USB 调试）
 
-1. 手机开启开发者选项与 USB 调试，连接电脑
-2. 在 Windows PowerShell / macOS / Linux 执行：
-```bash
-adb devices
-adb reverse tcp:17600 tcp:17600
-```
-3. 手机端 RecorderPhone 里 `Server URL` 填：
-```text
-http://127.0.0.1:17600
-```
-
-> Core 如果跑在 WSL：通常 Windows 的 `127.0.0.1:17600` 也能转发到 WSL（WSL2 localhost forwarding）。  
-> 若你的环境关闭了该转发，改成让 Core 监听 `0.0.0.0:17600` 再试。
-
-### 方案 B（Android 模拟器）
-模拟器里宿主机 localhost 是固定地址 `10.0.2.2`：
-```text
-http://10.0.2.2:17600
-```
-
-### 方案 C（同一局域网：真机直连桌面 IP）
-1. Core 需要监听可被局域网访问（例如 WSL 里）：
-```bash
-bash dev/run-core.sh 0.0.0.0:17600
-```
-2. 手机端 `Server URL` 填你的桌面局域网 IP，例如：
-```text
-http://192.168.1.23:17600
-```
-3. Windows 防火墙/安全软件可能拦截入站端口，需放行 17600（仅局域网）。
-
-## 3) 跑 Android UI
-
-### 真实 Flutter 工程（你在 Windows 上跑的那个）
-在 Windows 工程目录：
+1) 手机开启开发者选项与 USB 调试，插线连接电脑  
+2) Windows 上确认 `adb` 可用：
 ```powershell
-cd C:\src\RecorderPhone\recorderphone_ui
-flutter pub get
+adb devices
+```
+如果显示 `unauthorized`，在手机上点“允许 USB 调试”。
+
+---
+
+## 3) 在真机上跑（推荐最短闭环）
+
+在 **Windows PowerShell** 复制执行：
+```powershell
+cd C:\src\RecorderPhone
+
+# 覆盖模板 UI 到真实工程 + flutter pub get
+powershell -ExecutionPolicy Bypass -File .\dev\overlay-ui.ps1
+
+cd .\recorderphone_ui
+
+# 如果你之前只创建了 Windows 平台，需要补 Android 平台目录（只需执行一次）
+flutter create --platforms=windows,android --overwrite .
+
 flutter run -d android
 ```
 
-> 首次跑不起来优先看 `flutter doctor -v` 与 Android Studio SDK 是否完整。
+首次打开 App：
+- 进入 `Settings`，点击 `Open` 打开系统页面，开启 RecorderPhone 的 **Usage Access**
+- 回到 App，`Today` 会自动刷新（或点右上角刷新）生成 blocks
+
+---
 
 ## 4) 常见问题
 
-### Q：为什么 Android 上用 `http://127.0.0.1:17600` 访问不到？
-A：那是手机自己的 localhost。用上面的 A/B/C 任一方案即可。
+### Q：为什么看见的是包名（com.xxx）而不是应用名？
+A：已在插件里做了 label 解析；如果你看到旧数据，去 `Settings → Wipe all` 清空后重新生成 blocks。
 
-### Q：Android 上能不能“也采集手机应用使用情况”？
-A：可以，但需要 `PACKAGE_USAGE_STATS`（Usage Access）等权限，并且后台采集在不同品牌系统上会有系统限制。当前仓库优先把“桌面链路 + 复盘闭环”打磨稳定后再做 Android Collector（对应 PRD 的 M2）。
-
+### Q：Android 还会连桌面 Core 吗？
+A：后续可以做“局域网配对/同步”（只传 block 聚合），但你之前要求 Android 不依赖桌面，所以当前先把“手机本地可用”打稳。

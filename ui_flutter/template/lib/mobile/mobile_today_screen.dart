@@ -3,6 +3,7 @@ import "package:flutter/material.dart";
 import "../theme/tokens.dart";
 import "../utils/format.dart";
 import "mobile_models.dart";
+import "mobile_prefs.dart";
 import "mobile_quick_review_sheet.dart";
 import "mobile_store.dart";
 import "mobile_usage.dart";
@@ -14,17 +15,33 @@ class MobileTodayScreen extends StatefulWidget {
   State<MobileTodayScreen> createState() => _MobileTodayScreenState();
 }
 
-class _MobileTodayScreenState extends State<MobileTodayScreen> {
+class _MobileTodayScreenState extends State<MobileTodayScreen> with WidgetsBindingObserver {
   bool _loading = false;
   String? _error;
   List<MobileBlock> _blocks = const [];
-
-  int _blockMinutes = 45;
+  int _blockMinutes = MobilePrefs.defaultBlockMinutes;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // User likely just granted Usage Access in system settings.
+      if (!_loading) {
+        _refresh();
+      }
+    }
   }
 
   Future<void> _refresh() async {
@@ -34,6 +51,10 @@ class _MobileTodayScreenState extends State<MobileTodayScreen> {
       _error = null;
     });
     try {
+      final blockMinutes = await MobilePrefs.getBlockMinutes();
+      if (!mounted) return;
+      _blockMinutes = blockMinutes;
+
       final ok = await MobileUsage.instance.hasPermission();
       if (!ok) {
         setState(() {
@@ -135,7 +156,7 @@ class _MobileTodayScreenState extends State<MobileTodayScreen> {
             else if (_blocks.isEmpty)
               const Expanded(
                 child: Center(
-                  child: Text("No blocks yet. Pull to refresh after granting Usage Access."),
+                  child: Text("No blocks yet. Tap refresh after granting Usage Access."),
                 ),
               )
             else
@@ -148,7 +169,7 @@ class _MobileTodayScreenState extends State<MobileTodayScreen> {
                     final start = DateTime.fromMillisecondsSinceEpoch(b.startMs);
                     final end = DateTime.fromMillisecondsSinceEpoch(b.endMs);
                     final line1 = "${formatHHMM(start.toUtc().toIso8601String())}–${formatHHMM(end.toUtc().toIso8601String())}";
-                    final line2 = b.topItems.take(3).map((it) => "${it.id} ${formatDuration(it.seconds)}").join(" · ");
+                    final line2 = b.topItems.take(3).map((it) => "${it.displayName} ${formatDuration(it.seconds)}").join(" · ");
                     return InkWell(
                       onTap: () => _openReview(b),
                       borderRadius: BorderRadius.circular(RecorderTokens.radius3),
@@ -185,4 +206,3 @@ class _MobileTodayScreenState extends State<MobileTodayScreen> {
     );
   }
 }
-

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import android.app.usage.UsageStatsManager
+import android.content.pm.PackageManager
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -69,13 +70,21 @@ class RecorderphoneAndroidUsagePlugin : FlutterPlugin, MethodCallHandler {
 
     val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     val map = usm.queryAndAggregateUsageStats(startMs, endMs)
+    val pm = context.packageManager
     val out: MutableList<Map<String, Any>> = ArrayList()
     for ((_, s) in map) {
       val ms = s.totalTimeInForeground
       if (ms <= 0) continue
-      out.add(mapOf("packageName" to s.packageName, "foregroundMs" to ms))
+      val label = try {
+        val info = pm.getApplicationInfo(s.packageName, 0)
+        pm.getApplicationLabel(info).toString()
+      } catch (_: PackageManager.NameNotFoundException) {
+        s.packageName
+      } catch (_: Exception) {
+        s.packageName
+      }
+      out.add(mapOf("packageName" to s.packageName, "label" to label, "foregroundMs" to ms))
     }
     result.success(out)
   }
 }
-
