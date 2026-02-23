@@ -145,7 +145,9 @@ class TodayScreenState extends State<TodayScreen> {
 
   bool _coreStoreTitles = false;
   bool _coreStoreExePath = false;
+  int _blockSeconds = 45 * 60;
   int _reviewMinSeconds = 5 * 60;
+  int _reviewRepeatMinutes = 10;
   bool _reviewNotifyWhenPaused = false;
   bool _loading = true;
   String? _error;
@@ -373,12 +375,57 @@ class TodayScreenState extends State<TodayScreen> {
       setState(() {
         _coreStoreTitles = s.storeTitles;
         _coreStoreExePath = s.storeExePath;
+        _blockSeconds = s.blockSeconds;
         _reviewMinSeconds = s.reviewMinSeconds;
+        _reviewRepeatMinutes = s.reviewNotifyRepeatMinutes;
         _reviewNotifyWhenPaused = s.reviewNotifyWhenPaused;
       });
     } catch (_) {
       // best effort
     }
+  }
+
+  int _blockLengthSecondsSafe() {
+    final s = _blockSeconds;
+    if (s <= 0) return 45 * 60;
+    return s.clamp(60, 24 * 60 * 60);
+  }
+
+  int _reviewMinSecondsSafe() {
+    final s = _reviewMinSeconds;
+    if (s <= 0) return 5 * 60;
+    return s.clamp(60, 4 * 60 * 60);
+  }
+
+  int _reviewRepeatMinutesSafe() {
+    final m = _reviewRepeatMinutes;
+    if (m <= 0) return 10;
+    return m.clamp(1, 24 * 60);
+  }
+
+  String _dueReasonLong(BlockSummary b) {
+    final idx = _blocks.indexWhere((x) => x.id == b.id);
+    final hasNext = idx >= 0 && idx < (_blocks.length - 1);
+    if (hasNext) {
+      return "You already moved on to a new block after this one.";
+    }
+    if (b.totalSeconds >= _blockLengthSecondsSafe()) {
+      final blockMin = (_blockLengthSecondsSafe() / 60).round().clamp(1, 9999);
+      return "The current block reached the block length (${blockMin}m).";
+    }
+    final age = _ageText(b.endTs);
+    if (age.isNotEmpty) {
+      return "The last block ended ($age) and is still pending.";
+    }
+    return "The last block ended and is still pending.";
+  }
+
+  String _dueReasonShort(BlockSummary b) {
+    final idx = _blocks.indexWhere((x) => x.id == b.id);
+    final hasNext = idx >= 0 && idx < (_blocks.length - 1);
+    if (hasNext) return "You moved on to the next block";
+    if (b.totalSeconds >= _blockLengthSecondsSafe()) return "Current block reached block length";
+    return "Last block ended";
   }
 
   String _ruleKey(String kind, String value) => "$kind|$value";
@@ -805,7 +852,11 @@ class TodayScreenState extends State<TodayScreen> {
     try {
       final top = _blockTopLine(b);
       final title = "${formatHHMM(b.startTs)}–${formatHHMM(b.endTs)}";
-      final minMin = (_reviewMinSeconds / 60).ceil().clamp(1, 9999);
+      final dur = formatDuration(b.totalSeconds);
+      final minMin = (_reviewMinSecondsSafe() / 60).ceil().clamp(1, 9999);
+      final blockMin = (_blockLengthSecondsSafe() / 60).round().clamp(1, 9999);
+      final repeatM = _reviewRepeatMinutesSafe();
+      final why = _dueReasonLong(b);
 
       final action = await showDialog<String>(
         context: context,
@@ -813,11 +864,19 @@ class TodayScreenState extends State<TodayScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text("Time to review"),
           content: Text(
-            "$title\n\nTop: $top\n\n"
-            "Why now: latest ended block (≥ ${minMin}m) is still pending.\n"
-            "You can tune this in Settings → Review reminders.",
+            "$title · $dur\n\nTop: $top\n\n"
+            "Why now:\n"
+            "• A block becomes due when it's ≥ ${minMin}m and not reviewed/skipped.\n"
+            "• Triggers when you move on to a new block, or when the current block reaches ${blockMin}m.\n"
+            "• This reminder: $why\n\n"
+            "Repeat limit: ${repeatM}m per block.\n"
+            "Tune: Settings → Review reminders.",
           ),
           actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, "settings"),
+              child: const Text("Settings"),
+            ),
             TextButton(
               onPressed: () => Navigator.pop(ctx, "skip"),
               child: const Text("Skip"),
@@ -827,8 +886,8 @@ class TodayScreenState extends State<TodayScreen> {
               child: const Text("Pause 15m"),
             ),
             TextButton(
-              onPressed: () => Navigator.pop(ctx, "snooze10"),
-              child: const Text("Snooze 10m"),
+              onPressed: () => Navigator.pop(ctx, "snooze"),
+              child: Text("Snooze ${repeatM}m"),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, "review"),
@@ -841,6 +900,9 @@ class TodayScreenState extends State<TodayScreen> {
       if (!mounted) return;
       if (action == "review") {
         await _openQuickReview(b);
+      } else if (action == "settings") {
+        await _setSnooze(blockId: b.id, duration: Duration(minutes: repeatM));
+        widget.onOpenSettings?.call();
       } else if (action == "skip") {
         await _setSkipped(b, skipped: true);
       } else if (action == "pause15") {
@@ -859,9 +921,11 @@ class TodayScreenState extends State<TodayScreen> {
           ScaffoldMessenger.of(context)
               .showSnackBar(SnackBar(content: Text("Pause failed: $e")));
         }
+      } else if (action == "snooze") {
+        await _setSnooze(blockId: b.id, duration: Duration(minutes: repeatM));
       } else {
         // Treat dismiss as snooze to avoid nagging.
-        await _setSnooze(blockId: b.id, duration: const Duration(minutes: 10));
+        await _setSnooze(blockId: b.id, duration: Duration(minutes: repeatM));
       }
     } finally {
       _promptShowing = false;
@@ -1406,6 +1470,7 @@ class TodayScreenState extends State<TodayScreen> {
     final audioSuffix = audioTop == null
         ? ""
         : " · 🎧 ${audioTop.label} ${formatDuration(audioTop.seconds)}";
+    final reason = _dueReasonShort(due);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(RecorderTokens.space2),
@@ -1415,8 +1480,8 @@ class TodayScreenState extends State<TodayScreen> {
           leading: const Icon(Icons.notifications_active_outlined),
           title: const Text("Review due"),
           subtitle: Text(
-            "$title\nTop: $top$audioSuffix",
-            maxLines: 2,
+            "$title\nTop: $top$audioSuffix\nWhy now: $reason",
+            maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
           onTap: () => _openBlock(due),

@@ -1482,7 +1482,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     controller: _blockMinutes,
                     decoration: const InputDecoration(
                       labelText: "Block length (minutes)",
-                      helperText: "Changing this affects how blocks are segmented (including history).",
+                      helperText: "Controls block segmentation and review cadence (including history).",
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -1516,6 +1516,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: RecorderTokens.space2),
                   Text("Review reminders", style: Theme.of(context).textTheme.titleSmall),
                   const SizedBox(height: RecorderTokens.space2),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      const SizedBox(width: RecorderTokens.space1),
+                      Expanded(
+                        child: Text(
+                          "“Time to review” triggers when Core finds the most recent due block: long enough (min duration), not reviewed/skipped, and either you already moved on to a new block or the current block reached Block length. To reduce prompts: increase Block length / min duration / repeat.",
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: RecorderTokens.space2),
                   TextField(
                     controller: _reviewMinMinutes,
                     enabled: !_coreSettingsSaving,
@@ -1532,8 +1546,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     controller: _reviewToastRepeatMinutes,
                     enabled: !_coreSettingsSaving,
                     decoration: const InputDecoration(
-                      labelText: "Windows toast repeat interval (minutes)",
-                      helperText: "Minimum minutes between repeated notifications for the same block (default 10m).",
+                      labelText: "Repeat interval (minutes)",
+                      helperText: "Minimum minutes between reminders for the same due block (toast + in-app prompt). Default 10m.",
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -1550,7 +1564,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           },
                     contentPadding: EdgeInsets.zero,
                     title: const Text("Notify even when tracking is paused"),
-                    subtitle: const Text("Applies to Windows toast (collector)."),
+                    subtitle: const Text("Applies to Windows toast + in-app prompt."),
                   ),
                   SwitchListTile.adaptive(
                     value: _reviewNotifyWhenIdle,
@@ -1579,7 +1593,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(width: RecorderTokens.space1),
                       Expanded(
                         child: Text(
-                          "Toast settings take effect after restarting the desktop agent / collector.",
+                          "Windows toast settings take effect after restarting the desktop agent / collector.",
                           style: Theme.of(context).textTheme.labelMedium,
                         ),
                       ),
