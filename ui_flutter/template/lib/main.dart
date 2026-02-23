@@ -1,9 +1,11 @@
 import "package:flutter/material.dart";
+import "package:flutter/foundation.dart";
 
 import "utils/platform_args.dart";
 import "utils/single_instance.dart";
 
 import "screens/app_shell.dart";
+import "mobile/mobile_shell.dart";
 import "theme/recorder_theme.dart";
 
 Future<void> main() async {
@@ -41,16 +43,19 @@ class RecorderPhoneApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     return MaterialApp(
       title: "RecorderPhone",
       theme: RecorderTheme.light(),
       darkTheme: RecorderTheme.dark(),
       themeMode: ThemeMode.system,
-      home: AppShell(
-        initialDeepLink: initialDeepLink,
-        startMinimized: startMinimized,
-        externalCommands: externalCommands,
-      ),
+      home: isAndroid
+          ? const MobileShell()
+          : AppShell(
+              initialDeepLink: initialDeepLink,
+              startMinimized: startMinimized,
+              externalCommands: externalCommands,
+            ),
     );
   }
 }

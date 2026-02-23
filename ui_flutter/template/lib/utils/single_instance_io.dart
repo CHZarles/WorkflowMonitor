@@ -62,6 +62,11 @@ Future<SingleInstanceHandle?> ensureSingleInstanceImpl(List<String> args) async 
     return SingleInstanceHandle(messages: const Stream.empty(), dispose: () async {});
   }
 
+  // Only enforce on Windows (where it prevents double-tracking and makes deep links work reliably).
+  if (!Platform.isWindows) {
+    return SingleInstanceHandle(messages: const Stream.empty(), dispose: () async {});
+  }
+
   // In debug runs it is common to restart the app frequently; keep it enabled by default,
   // but do not hard-fail if something is weird (e.g. port collision).
   // Use a single-subscription stream so messages are buffered until the UI attaches a listener.
