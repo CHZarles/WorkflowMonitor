@@ -28,6 +28,13 @@ adb devices
 
 ## 3) 在真机上跑（推荐最短闭环）
 
+### 一条命令（推荐）
+```powershell
+cd C:\src\RecorderPhone
+powershell -ExecutionPolicy Bypass -File .\dev\run-android.ps1
+```
+
+### 手动步骤（发生问题时用）
 在 **Windows PowerShell** 复制执行：
 ```powershell
 cd C:\src\RecorderPhone
