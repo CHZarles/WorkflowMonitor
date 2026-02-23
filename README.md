@@ -14,6 +14,7 @@
 - `design-tokens.json`（Light/Dark + tokens 源数据）
 - `WINDOWS_DEV.md`（在 Windows 查看最新开发进展：WSL 同步 + Flutter 覆盖流程）
 - `ANDROID_DEV.md`（Android 端如何联调桌面 Core：adb reverse / 模拟器 / 局域网）
+- `RELEASING.md`（发布到 GitHub：每次升级从 Releases 下载 Windows 打包版）
 
 ## 目录结构
 ```
@@ -24,16 +25,11 @@ extension/      Chrome/Edge MV3 扩展（域名级上报）
 schemas/        本机上报事件 schema
 samples/        主题映射示例（Android/WPF/WinUI）
 dev/            开发脚本（WSL 联调 / 同步到 Windows）
-
-# 旧原型（可忽略）
-windows/        WinUI 3 原型（已不作为主路径）
-android/        Android Compose 原型（已不作为主路径）
 ```
 
 ## Tokens（两端主题接入）
 - 源数据：`design-tokens.json`
 - Flutter 模板：`ui_flutter/template/lib/theme/tokens.dart`
-- WinUI/Compose 的主题映射仍保留在旧原型里（后续可移除）
 
 > 目前是“手动同步”方式：tokens 变化后需要同步更新两端映射文件（后续可加生成脚本）。
 
@@ -47,6 +43,9 @@ android/        Android Compose 原型（已不作为主路径）
 - Collectors：见 `collectors/README.md`
 - Flutter UI：见 `ui_flutter/README.md`
 - Extension：见 `extension/README.md`
+
+## 下载/发布（Windows）
+如果你希望“每次升级都去 GitHub 拿最新 exe”，直接看：`RELEASING.md`（已内置 GitHub Actions：tag 触发打包并发布到 Releases）。
 
 ## Quickstart（先把链路跑通）
 ### 方案 A（WSL 也能跑通：推荐）
