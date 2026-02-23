@@ -56,69 +56,10 @@ RecorderPhone 是一套**本地优先**的“使用记录 + 分段复盘”工�
 
 ---
 
-## 目录结构
-```
-core/           Core 本机服务（Rust）
-collectors/     采集器（Windows）
-ui_flutter/     Flutter UI 模板（Windows/Android 共用）
-recorderphone_ui/  你本机生成的 Flutter 工程（运行/打包用，通常不提交）
-extension/      Chrome/Edge MV3 扩展（域名级上报）
-packages/       Flutter plugins（Android UsageStats 等）
-android/        旧 Compose 原型（保留参考）
-schemas/        本机上报事件 schema
-dev/            开发/打包脚本（overlay/sync/package）
-dist/           打包输出（被 gitignore）
-```
-其它文档/示例：
-- `samples/`：主题映射示例（Android/WPF/WinUI）
+## 开发者文档（源码构建/联调/发布）
 
-## Tokens（两端主题接入）
-- 源数据：`design-tokens.json`
-- Flutter 模板：`ui_flutter/template/lib/theme/tokens.dart`
-
-> 目前是“手动同步”方式：tokens 变化后需要同步更新两端映射文件（后续可加生成脚本）。
-
-## 浏览器扩展 → Core（链路）
-- 扩展默认上报到：`http://127.0.0.1:17600/event`
-- 事件结构：`schemas/ingest-event.schema.json`
-- Core 默认提供 `/health`、`/event`、`/events`、`/blocks/today`、`/blocks/review`、`/privacy/rules`、`/export/markdown`、`/export/csv`（见 `core/README.md`）
-
-## 从源码构建/运行（开发用）
-- Windows 开发指南：`WINDOWS_DEV.md`
-- Android 真机测试：`ANDROID_DEV.md`
-- Core：`core/README.md`
-- Collectors：`collectors/README.md`
-- Flutter UI：`ui_flutter/README.md`
-- Extension：`extension/README.md`
-
-## 下载/发布（Windows）
-如果你希望“每次升级都去 GitHub 拿最新 exe”，直接看：`RELEASING.md`（已内置 GitHub Actions：tag 触发打包并发布到 Releases）。
-
-## Quickstart（先把链路跑通）
-### 方案 A（WSL 也能跑通：推荐）
-1. 在 WSL 启动 Core：`bash dev/run-core.sh 127.0.0.1:17600`（等价于 `cargo run -p recorder_core -- --listen 127.0.0.1:17600`）
-2. 在 Windows 浏览器加载 `extension/`（解压加载），popup 点击 `Test /health` 应显示 `OK`
-3. 随便打开/切换几个网页 tab：访问 `http://127.0.0.1:17600/events` 能看到域名事件
-
-### 方案 A2（Windows 本地一键启动：不依赖 WSL）
-在 Windows PowerShell：
-`powershell -ExecutionPolicy Bypass -File .\\dev\\run-desktop.ps1 -SendTitle`
-> 详见：`WINDOWS_DEV.md`。
-
-### 方案 A3（Windows 打包版：只点一个 exe）
-在 Windows PowerShell 生成打包目录（会把 Core/Collector 放到 UI 旁边）：
-`powershell -ExecutionPolicy Bypass -File .\\dev\\package-windows.ps1 -InstallProtocol`
-
-然后双击运行：
-`dist\\windows\\RecorderPhone\\RecorderPhone.exe`
-
-### 方案 B（仅用于扩展联调：不支持 UI）
-1. 在 WSL 启动简化接收服务：`node dev/ingest-server.mjs`
-2. 说明：该服务只提供 `/health`、`/event`、`/events`，不提供 `/settings`、`/blocks/today`、`/privacy/rules` 等接口  
-   如果你要运行 Flutter UI（Today Top/Review/Settings/导出），请使用方案 A 启动 `recorder_core`。
-
-## 一键全清（重置所有数据）
-这会删除 Core 的 SQLite 数据库（包含：events、blocks/review、privacy rules、settings）。
-
-- WSL/Linux：`bash dev/wipe-core-db.sh`
-- Windows（仅当 Core 在 Windows 上运行时）：`powershell -ExecutionPolicy Bypass -File .\\dev\\wipe-core-db.ps1`
+如果你要从源码开发（而不是直接用打包版），请看：
+- `DEVELOPING.md`（开发入口与目录说明）
+- `WINDOWS_DEV.md`（Windows 开发与联调）
+- `ANDROID_DEV.md`（Android 真机测试）
+- `RELEASING.md`（GitHub Actions 打包与 Release）
