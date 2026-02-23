@@ -3,7 +3,7 @@
  * RecorderPhone — WSL -> Windows autosync helper
  *
  * Goal:
- * - Edit in WSL, but run/build Windows-only tooling (VS/WinUI) against a mirror on /mnt/c/...
+ * - Edit in WSL, but run/build Windows-only tooling (Flutter Windows / Visual Studio toolchain / Rust MSVC) against a mirror on /mnt/c/...
  *
  * Usage:
  *   node dev/sync-to-windows.mjs /mnt/c/src/RecorderPhone

@@ -198,16 +198,16 @@
 ## 13. 最小可行技术选型清单（Windows Agent + Android 采集）
 
 ### 13.1 Windows11（MVP 推荐）
-- 语言/运行时：`.NET 8` + `C#`
-- 常驻形态：托盘应用（WinUI 3 或 WPF；MVP 优先 WPF，生态成熟、开发快）
-- 前台窗口/进程采集（Win32 API）：
-  - `GetForegroundWindow` / `GetWindowText`（可选标题）
-  - `GetWindowThreadProcessId` + `OpenProcess` / `QueryFullProcessImageName`
+- UI：`Flutter`（Windows/Android 共用一套 UI；Windows 端提供托盘与单实例）
+- Core：`Rust` 本机服务（`recorder_core`，Axum + SQLite），监听 `localhost` HTTP
+- Windows 采集器：极小 `Rust` exe（`windows_collector`），只做 Win32/系统采集 → POST 到 Core
+  - 前台窗口/进程：`GetForegroundWindow` / `GetWindowText`（可选标题）
+  - 进程信息：`GetWindowThreadProcessId` + `OpenProcess` / `QueryFullProcessImageName`
   - 空闲：`GetLastInputInfo`
-- 数据库：`SQLite`（`Microsoft.Data.Sqlite`），表按 `raw_event` + `block` + 索引（day/start_time）
-- 进程间通信（扩展/移动端可用）：本机 `localhost` HTTP（Kestrel）或 Named Pipe
-- 通知：Windows Toast（`Windows.UI.Notifications` / CommunityToolkit）
-- 打包/更新：MSIX（后续再上自动更新；MVP 可手动安装）
+  - 后台音频 App（可选）：Windows CoreAudio sessions（用于“后台播放也算 Now”）
+- 数据库：`SQLite`（Core 内 `rusqlite` bundled）
+- 通知：Windows Toast（采集器 best-effort 发 toast；点击通过自定义 `recorderphone://` 深链回到 UI）
+- 打包/更新：便携目录（Portable zip）+ GitHub Actions tag 发布（无需安装器；后续再考虑自动更新/签名）
 
 ### 13.2 浏览器扩展（Edge/Chrome，MVP 可选但建议做）
 - 标准：Manifest V3
