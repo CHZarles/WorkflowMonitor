@@ -7,6 +7,7 @@ import "package:window_manager/window_manager.dart";
 import "../api/core_client.dart";
 import "../utils/desktop_agent.dart";
 import "../utils/tray_controller.dart";
+import "../utils/update_manager.dart";
 import "reports_screen.dart";
 import "search_screen.dart";
 import "settings_screen.dart";
@@ -33,6 +34,9 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   static const _prefServerUrl = "serverUrl";
   static const _defaultServerUrl = "http://127.0.0.1:17600";
+  static const _prefUpdateRepo = "updateGitHubRepo";
+  static const _prefUpdateAutoCheck = "updateAutoCheck";
+  static const _prefUpdateLastCheckIso = "updateLastCheckIso";
 
   final _todayKey = GlobalKey<TodayScreenState>();
   final _searchKey = GlobalKey<SearchScreenState>();
@@ -48,6 +52,7 @@ class _AppShellState extends State<AppShell> {
   Timer? _trackingTimer;
   bool _agentStartAttempted = false;
   StreamSubscription<String>? _externalSub;
+  bool _updateCheckAttempted = false;
 
   String _normalizeServerUrl(String input) {
     final trimmed = input.trim();
@@ -135,6 +140,7 @@ class _AppShellState extends State<AppShell> {
     // Best-effort: if Core is down and we're on Windows, try starting the local agent so the user
     // doesn't need to run Core/Collector separately.
     unawaited(_maybeStartLocalAgent());
+    unawaited(_maybeAutoCheckUpdates());
 
     await _refreshTracking();
     _trackingTimer?.cancel();
@@ -191,6 +197,61 @@ class _AppShellState extends State<AppShell> {
       _searchKey.currentState?.refresh(silent: true);
       _reportsKey.currentState?.refresh(silent: true);
     });
+  }
+
+  Future<void> _maybeAutoCheckUpdates() async {
+    if (_updateCheckAttempted) return;
+    _updateCheckAttempted = true;
+
+    final mgr = UpdateManager.instance;
+    if (!mgr.isAvailable) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final auto = prefs.getBool(_prefUpdateAutoCheck) ?? true;
+      if (!auto) return;
+
+      var repo = (prefs.getString(_prefUpdateRepo) ?? "").trim();
+      repo = repo.isEmpty ? ((await mgr.defaultGitHubRepo()) ?? "").trim() : repo;
+      if (repo.isEmpty) return;
+
+      final lastIso = (prefs.getString(_prefUpdateLastCheckIso) ?? "").trim();
+      if (lastIso.isNotEmpty) {
+        try {
+          final last = DateTime.parse(lastIso).toLocal();
+          if (DateTime.now().difference(last) < const Duration(hours: 6)) return;
+        } catch (_) {
+          // ignore
+        }
+      }
+
+      final res = await mgr.checkLatest(gitHubRepo: repo);
+      try {
+        await prefs.setString(_prefUpdateLastCheckIso, DateTime.now().toIso8601String());
+      } catch (_) {
+        // ignore
+      }
+      if (!res.ok || !res.updateAvailable) return;
+      if (!mounted) return;
+
+      // If the app started minimized to tray, don't spam a snackbar the user won't see.
+      if (widget.startMinimized) return;
+
+      final tag = res.latest?.tag ?? "latest";
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 8),
+          showCloseIcon: true,
+          content: Text("Update available: $tag"),
+          action: SnackBarAction(
+            label: "Open Settings",
+            onPressed: () => _setIndex(3),
+          ),
+        ),
+      );
+    } catch (_) {
+      // best effort
+    }
   }
 
   void _maybeHandleInitialDeepLink() {

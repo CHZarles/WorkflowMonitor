@@ -176,18 +176,59 @@ function Write-BuildInfo {
     [Parameter(Mandatory = $true)][string]$CollectorExe
   )
 
-  $git = ""
-  try {
-    $g = & git -C $RepoRoot rev-parse HEAD 2>$null
-    if ($g) { $git = ($g -join "").Trim() }
-  } catch {
-    # ignore
+  function Try-Git {
+    param([Parameter(Mandatory = $true)][string[]]$Args)
+    try {
+      $out = & git -C $RepoRoot @Args 2>$null
+      if ($out) { return ($out -join "`n").Trim() }
+    } catch {
+      # ignore
+    }
+    return ""
   }
+
+  function Try-DetectGitHubRepo {
+    # 1) CI/env override
+    $envRepo = ""
+    if ($env:RECORDERPHONE_UPDATE_REPO) {
+      $envRepo = $env:RECORDERPHONE_UPDATE_REPO
+    } elseif ($env:GITHUB_REPOSITORY) {
+      $envRepo = $env:GITHUB_REPOSITORY
+    }
+    $envRepo = $envRepo.ToString().Trim()
+    if ($envRepo -match "^[^/]+/[^/]+$") { return $envRepo }
+
+    # 2) Parse from git remote url
+    $u = Try-Git -Args @("remote", "get-url", "origin")
+    if ([string]::IsNullOrWhiteSpace($u)) { return "" }
+    $u = $u.Trim()
+
+    # Examples:
+    # - https://github.com/owner/repo.git
+    # - git@github.com:owner/repo.git
+    # - ssh://git@github.com/owner/repo.git
+    $m = [regex]::Match($u, "github\.com[:/](?<owner>[^/]+)/(?<repo>[^/\.]+)(?:\.git)?$", "IgnoreCase")
+    if ($m.Success) {
+      $owner = $m.Groups["owner"].Value
+      $repo = $m.Groups["repo"].Value
+      if ($owner -and $repo) { return "$owner/$repo" }
+    }
+
+    return ""
+  }
+
+  $git = ""
+  $git = Try-Git -Args @("rev-parse", "HEAD")
+  $gitTag = Try-Git -Args @("describe", "--tags", "--exact-match")
+  $gitDescribe = Try-Git -Args @("describe", "--tags", "--always")
+  $githubRepo = Try-DetectGitHubRepo
 
   $info = @{
     builtAt = (Get-Date).ToString("o")
     repoRoot = $RepoRoot
     git = if ([string]::IsNullOrWhiteSpace($git)) { $null } else { $git }
+    gitTag = if ([string]::IsNullOrWhiteSpace($gitTag)) { $null } else { $gitTag }
+    gitDescribe = if ([string]::IsNullOrWhiteSpace($gitDescribe)) { $null } else { $gitDescribe }
     core = @{
       exe = "recorder_core.exe"
       version = (Try-ExeVersion -ExePath $CoreExe)
@@ -197,6 +238,10 @@ function Write-BuildInfo {
       exe = "windows_collector.exe"
       version = (Try-ExeVersion -ExePath $CollectorExe)
       sha256 = (Get-Sha256 -Path $CollectorExe)
+    }
+    update = @{
+      githubRepo = if ([string]::IsNullOrWhiteSpace($githubRepo)) { $null } else { $githubRepo }
+      assetSuffix = "-windows.zip"
     }
   }
 

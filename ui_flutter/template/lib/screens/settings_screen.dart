@@ -3,12 +3,14 @@ import "dart:async";
 import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
+import "package:shared_preferences/shared_preferences.dart";
 
 import "../api/core_client.dart";
 import "../theme/tokens.dart";
 import "../utils/desktop_agent.dart";
 import "../utils/format.dart";
 import "../utils/startup.dart";
+import "../utils/update_manager.dart";
 
 enum _PrivacyLevel { l1, l2, l3 }
 
@@ -33,12 +35,17 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const _prefUpdateRepo = "updateGitHubRepo";
+  static const _prefUpdateAutoCheck = "updateAutoCheck";
+  static const _prefUpdateLastCheckIso = "updateLastCheckIso";
+
   late final TextEditingController _dateLocal;
   late final TextEditingController _blockMinutes;
   late final TextEditingController _idleCutoffMinutes;
   late final TextEditingController _reviewMinMinutes;
   late final TextEditingController _reviewToastRepeatMinutes;
   late final TextEditingController _ruleQuery;
+  late final TextEditingController _updateRepo;
   _RuleFilter _ruleFilter = _RuleFilter.all;
 
   bool _healthLoading = false;
@@ -81,6 +88,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool? _startupEnabled;
   String? _startupError;
 
+  bool _updatesLoading = false;
+  bool _updatesInstalling = false;
+  bool _updateAutoCheck = true;
+  DateTime? _updateLastCheckedAt;
+  String? _updatesError;
+  BuildInfo? _buildInfo;
+  UpdateRelease? _latestRelease;
+  bool _updateAvailable = false;
+  Timer? _updateRepoSaveDebounce;
+
   @override
   void initState() {
     super.initState();
@@ -90,9 +107,193 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _reviewMinMinutes = TextEditingController(text: "5");
     _reviewToastRepeatMinutes = TextEditingController(text: "10");
     _ruleQuery = TextEditingController();
+    _updateRepo = TextEditingController();
     _refreshAll();
     _loadAgentInfo();
     _loadStartup();
+    _loadUpdatePrefsAndInfo();
+  }
+
+  Future<void> _loadUpdatePrefsAndInfo() async {
+    final mgr = UpdateManager.instance;
+    if (!mgr.isAvailable) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final repoPref = (prefs.getString(_prefUpdateRepo) ?? "").trim();
+      final auto = prefs.getBool(_prefUpdateAutoCheck);
+      final lastIso = (prefs.getString(_prefUpdateLastCheckIso) ?? "").trim();
+      DateTime? last;
+      if (lastIso.isNotEmpty) {
+        try {
+          last = DateTime.parse(lastIso).toLocal();
+        } catch (_) {
+          last = null;
+        }
+      }
+
+      final build = await mgr.readBuildInfo();
+      final repoDefault = (build?.updateGitHubRepo ?? "").trim();
+      final repo = repoPref.isNotEmpty ? repoPref : repoDefault;
+
+      if (!mounted) return;
+      setState(() {
+        _buildInfo = build;
+        _updateAutoCheck = auto ?? true;
+        _updateLastCheckedAt = last;
+        if (_updateRepo.text.trim().isEmpty) _updateRepo.text = repo;
+      });
+
+      if (_updateAutoCheck && repo.trim().isNotEmpty) {
+        await _checkUpdates(force: false);
+      }
+    } catch (_) {
+      // best effort
+    }
+  }
+
+  Future<void> _saveUpdateRepo(String repo) async {
+    final mgr = UpdateManager.instance;
+    if (!mgr.isAvailable) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = repo.trim();
+      if (v.isEmpty) {
+        await prefs.remove(_prefUpdateRepo);
+      } else {
+        await prefs.setString(_prefUpdateRepo, v);
+      }
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  void _scheduleSaveUpdateRepo() {
+    _updateRepoSaveDebounce?.cancel();
+    _updateRepoSaveDebounce = Timer(const Duration(milliseconds: 650), () {
+      _saveUpdateRepo(_updateRepo.text);
+    });
+  }
+
+  Future<void> _setUpdateAutoCheck(bool enabled) async {
+    final mgr = UpdateManager.instance;
+    if (!mgr.isAvailable) return;
+    setState(() => _updateAutoCheck = enabled);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefUpdateAutoCheck, enabled);
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  Future<void> _setUpdateLastChecked(DateTime t) async {
+    final mgr = UpdateManager.instance;
+    if (!mgr.isAvailable) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefUpdateLastCheckIso, t.toIso8601String());
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  Future<void> _checkUpdates({required bool force}) async {
+    final mgr = UpdateManager.instance;
+    if (!mgr.isAvailable) return;
+    if (_updatesLoading || _updatesInstalling) return;
+
+    final repo = _updateRepo.text.trim();
+    if (repo.isEmpty) {
+      setState(() {
+        _latestRelease = null;
+        _updateAvailable = false;
+        _updatesError = "Set GitHub repo (owner/name) to enable updates.";
+      });
+      return;
+    }
+
+    final now = DateTime.now();
+    if (!force && _updateLastCheckedAt != null) {
+      final d = now.difference(_updateLastCheckedAt!);
+      if (d < const Duration(hours: 6)) return;
+    }
+
+    setState(() {
+      _updatesLoading = true;
+      _updatesError = null;
+    });
+    try {
+      final res = await mgr.checkLatest(gitHubRepo: repo);
+      if (!mounted) return;
+      setState(() {
+        _buildInfo = res.current ?? _buildInfo;
+        _latestRelease = res.latest;
+        _updateAvailable = res.ok && res.updateAvailable;
+        _updatesError = res.ok ? null : (res.error ?? "update_check_failed");
+        _updateLastCheckedAt = now;
+      });
+      await _setUpdateLastChecked(now);
+    } finally {
+      if (mounted) setState(() => _updatesLoading = false);
+    }
+  }
+
+  String _shortSha(String? sha) {
+    final s = (sha ?? "").trim();
+    if (s.isEmpty) return "";
+    return s.length <= 12 ? s : s.substring(0, 12);
+  }
+
+  String _formatLocalTime(DateTime? t) {
+    if (t == null) return "";
+    final y = t.year.toString().padLeft(4, "0");
+    final m = t.month.toString().padLeft(2, "0");
+    final d = t.day.toString().padLeft(2, "0");
+    final hh = t.hour.toString().padLeft(2, "0");
+    final mm = t.minute.toString().padLeft(2, "0");
+    return "$y-$m-$d $hh:$mm";
+  }
+
+  Future<void> _installUpdate() async {
+    final mgr = UpdateManager.instance;
+    if (!mgr.isAvailable) return;
+    final latest = _latestRelease;
+    final url = (latest?.assetUrl ?? "").trim();
+    if (latest == null || url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No update asset found.")));
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("Update to ${latest.tag}?"),
+        content: const Text("RecorderPhone will close, install the update, then restart."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Update & restart")),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() {
+      _updatesInstalling = true;
+      _updatesError = null;
+    });
+    try {
+      final res = await mgr.installUpdate(latest: latest, installZipUrl: url);
+      if (!mounted) return;
+      if (!res.ok) {
+        setState(() => _updatesError = res.error ?? "install_failed");
+        return;
+      }
+
+      // Updater will restart the app; exit this process immediately.
+      mgr.exitApp();
+    } finally {
+      if (mounted) setState(() => _updatesInstalling = false);
+    }
   }
 
   Future<void> _loadAgentInfo() async {
@@ -216,6 +417,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Settings is shown via IndexedStack. Refresh on entry so users don't have to manually
       // click "Refresh" after Core becomes healthy (e.g. when the desktop agent starts up).
       _refreshAll();
+      if (UpdateManager.instance.isAvailable && _updateAutoCheck) {
+        unawaited(_checkUpdates(force: false));
+      }
     }
   }
 
@@ -228,6 +432,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _reviewToastRepeatMinutes.dispose();
     _reviewSaveDebounce?.cancel();
     _ruleQuery.dispose();
+    _updateRepo.dispose();
+    _updateRepoSaveDebounce?.cancel();
     super.dispose();
   }
 
@@ -1115,6 +1321,127 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         const SizedBox(height: RecorderTokens.space6),
+        if (UpdateManager.instance.isAvailable) ...[
+          Text("Updates", style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: RecorderTokens.space3),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(RecorderTokens.space4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Builder(
+                    builder: (context) {
+                      final b = _buildInfo;
+                      final tag = (b?.gitTag ?? "").trim();
+                      final desc = (b?.gitDescribe ?? "").trim();
+                      final sha = _shortSha(b?.git);
+                      final cur = tag.isNotEmpty ? tag : (desc.isNotEmpty ? desc : (sha.isNotEmpty ? sha : "unknown"));
+
+                      final coreV = (b?.coreVersion ?? "").trim();
+                      final colV = (b?.collectorVersion ?? "").trim();
+                      final meta = [
+                        if (sha.isNotEmpty) "git:$sha",
+                        if (coreV.isNotEmpty) "core:$coreV",
+                        if (colV.isNotEmpty) "collector:$colV",
+                      ].join(" · ");
+
+                      return Text(
+                        meta.isEmpty ? "Current: $cur" : "Current: $cur\n$meta",
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      );
+                    },
+                  ),
+                  const SizedBox(height: RecorderTokens.space3),
+                  TextField(
+                    controller: _updateRepo,
+                    enabled: !_updatesInstalling,
+                    decoration: const InputDecoration(
+                      labelText: "GitHub repo (owner/name)",
+                      helperText: "Used for update checks via GitHub Releases (public repos work without tokens).",
+                    ),
+                    onChanged: (_) => _scheduleSaveUpdateRepo(),
+                    onSubmitted: (_) => _saveUpdateRepo(_updateRepo.text),
+                  ),
+                  const SizedBox(height: RecorderTokens.space2),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    value: _updateAutoCheck,
+                    onChanged: _updatesInstalling
+                        ? null
+                        : (v) async {
+                            await _setUpdateAutoCheck(v);
+                            if (v) {
+                              unawaited(_checkUpdates(force: false));
+                            }
+                          },
+                    title: const Text("Auto-check updates"),
+                    subtitle: const Text("Checks at most every 6 hours."),
+                  ),
+                  const SizedBox(height: RecorderTokens.space2),
+                  Row(
+                    children: [
+                      if (_updatesLoading || _updatesInstalling)
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else
+                        Icon(
+                          _updateAvailable ? Icons.system_update_alt : Icons.check_circle_outline,
+                          size: 18,
+                          color: _updateAvailable
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      const SizedBox(width: RecorderTokens.space2),
+                      Expanded(
+                        child: Builder(
+                          builder: (context) {
+                            final latest = _latestRelease;
+                            final latestTag = latest?.tag ?? "";
+                            final last = _formatLocalTime(_updateLastCheckedAt);
+                            final status = _updateAvailable
+                                ? (latestTag.isEmpty ? "Update available" : "Update available: $latestTag")
+                                : (latestTag.isEmpty ? "No update info yet" : "Latest: $latestTag");
+                            return Text(
+                              last.isEmpty ? status : "$status · checked $last",
+                              style: Theme.of(context).textTheme.labelMedium,
+                            );
+                          },
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: (_updatesLoading || _updatesInstalling) ? null : () => _checkUpdates(force: true),
+                        icon: const Icon(Icons.refresh),
+                        label: const Text("Check"),
+                      ),
+                    ],
+                  ),
+                  if (_updateAvailable) ...[
+                    const SizedBox(height: RecorderTokens.space2),
+                    FilledButton.icon(
+                      onPressed: _updatesInstalling ? null : _installUpdate,
+                      icon: const Icon(Icons.system_update_alt),
+                      label: Text(_updatesInstalling ? "Updating…" : "Update & restart"),
+                    ),
+                  ],
+                  if (_updatesError != null) ...[
+                    const SizedBox(height: RecorderTokens.space2),
+                    Text(
+                      _updatesError!,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: RecorderTokens.space6),
+        ],
         Row(
           children: [
             Expanded(child: Text("Diagnostics", style: Theme.of(context).textTheme.titleMedium)),

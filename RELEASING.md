@@ -71,3 +71,14 @@ git push origin v0.1.1
   - `%LOCALAPPDATA%\\RecorderPhone\\recorder-core.db`
   - `%LOCALAPPDATA%\\RecorderPhone\\agent-pids.json`
 
+---
+
+## 5) 应用内自动更新（Windows 打包版）
+
+打包版（Releases zip）内置一个轻量更新器：
+- `Settings → Updates` 可手动 `Check` / `Update & restart`
+- 默认开启“每 6 小时自动检查一次”（不会自动安装，避免打断）
+
+限制：
+- 基于 GitHub Releases（无 token 仅支持 Public 仓库）
+- Private 仓库请继续用“手动下载 zip 覆盖”的方式升级
