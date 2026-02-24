@@ -9,7 +9,8 @@ class MobileTopItem {
   final String? label;
   final int seconds;
 
-  Map<String, Object?> toJson() => {"id": id, "label": label, "seconds": seconds};
+  Map<String, Object?> toJson() =>
+      {"id": id, "label": label, "seconds": seconds};
 
   String get displayName {
     final v = (label ?? "").trim();
@@ -67,9 +68,15 @@ class MobileReview {
     return MobileReview(
       updatedAtIso: (obj["updated_at"] ?? "").toString(),
       skipped: obj["skipped"] == true,
-      doing: (obj["doing"] ?? "").toString().trim().isEmpty ? null : (obj["doing"] ?? "").toString(),
-      output: (obj["output"] ?? "").toString().trim().isEmpty ? null : (obj["output"] ?? "").toString(),
-      next: (obj["next"] ?? "").toString().trim().isEmpty ? null : (obj["next"] ?? "").toString(),
+      doing: (obj["doing"] ?? "").toString().trim().isEmpty
+          ? null
+          : (obj["doing"] ?? "").toString(),
+      output: (obj["output"] ?? "").toString().trim().isEmpty
+          ? null
+          : (obj["output"] ?? "").toString(),
+      next: (obj["next"] ?? "").toString().trim().isEmpty
+          ? null
+          : (obj["next"] ?? "").toString(),
       tags: tags,
     );
   }
@@ -92,4 +99,42 @@ class MobileBlock {
 
   bool get reviewed => review != null && review!.skipped == false;
   bool get skipped => review?.skipped == true;
+
+  Map<String, Object?> toJson() => {
+        "id": id,
+        "start_ms": startMs,
+        "end_ms": endMs,
+        "top": topItems.map((it) => it.toJson()).toList(),
+        "review": review?.toJson(),
+      };
+
+  static MobileBlock fromJson(Map<String, dynamic> obj) {
+    final id = (obj["id"] ?? "").toString();
+    final sRaw = obj["start_ms"];
+    final eRaw = obj["end_ms"];
+    final startMs = sRaw is int ? sRaw : int.tryParse(sRaw.toString()) ?? 0;
+    final endMs = eRaw is int ? eRaw : int.tryParse(eRaw.toString()) ?? 0;
+
+    final topItems = <MobileTopItem>[];
+    final topRaw = obj["top"];
+    if (topRaw is List) {
+      for (final it in topRaw) {
+        if (it is Map) topItems.add(MobileTopItem.fromJson(it));
+      }
+    }
+
+    MobileReview? review;
+    final reviewRaw = obj["review"];
+    if (reviewRaw is Map) {
+      review = MobileReview.fromJson(reviewRaw);
+    }
+
+    return MobileBlock(
+      id: id,
+      startMs: startMs,
+      endMs: endMs,
+      topItems: topItems,
+      review: review,
+    );
+  }
 }

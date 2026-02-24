@@ -10,12 +10,18 @@ import "../widgets/block_detail_sheet.dart";
 import "../widgets/quick_review_sheet.dart";
 
 class SearchScreen extends StatefulWidget {
-  const SearchScreen(
-      {super.key, required this.client, required this.serverUrl, this.isActive = false});
+  const SearchScreen({
+    super.key,
+    required this.client,
+    required this.serverUrl,
+    this.isActive = false,
+    this.tutorialHeaderKey,
+  });
 
   final CoreClient client;
   final String serverUrl;
   final bool isActive;
+  final GlobalKey? tutorialHeaderKey;
 
   @override
   State<SearchScreen> createState() => SearchScreenState();
@@ -127,7 +133,10 @@ class SearchScreenState extends State<SearchScreen> {
     final uri = Uri.tryParse(widget.serverUrl.trim());
     if (uri == null) return false;
     final host = uri.host.trim().toLowerCase();
-    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+    return host == "127.0.0.1" ||
+        host == "localhost" ||
+        host == "0.0.0.0" ||
+        host == "::1";
   }
 
   Future<void> refresh({bool silent = false}) async {
@@ -212,8 +221,12 @@ class SearchScreenState extends State<SearchScreen> {
     final s = msg.toLowerCase();
     if (s.contains("health_failed")) return true;
     if (s.contains("connection") || s.contains("socket")) return true;
-    if (s.contains("refused") || s.contains("timed out") || s.contains("timeout")) return true;
-    if (s.contains("http_502") || s.contains("http_503") || s.contains("http_504")) return true;
+    if (s.contains("refused") ||
+        s.contains("timed out") ||
+        s.contains("timeout")) return true;
+    if (s.contains("http_502") ||
+        s.contains("http_503") ||
+        s.contains("http_504")) return true;
     return false;
   }
 
@@ -583,45 +596,45 @@ class SearchScreenState extends State<SearchScreen> {
       ),
     );
 
-    if (isWide) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final Widget content = isWide
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: field),
-              const SizedBox(width: RecorderTokens.space3),
-              dateBtn,
+              Row(
+                children: [
+                  Expanded(child: field),
+                  const SizedBox(width: RecorderTokens.space3),
+                  dateBtn,
+                ],
+              ),
+              const SizedBox(height: RecorderTokens.space2),
+              Row(
+                children: [
+                  Expanded(child: meta),
+                  const SizedBox(width: RecorderTokens.space3),
+                  filter,
+                ],
+              ),
             ],
-          ),
-          const SizedBox(height: RecorderTokens.space2),
-          Row(
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: meta),
-              const SizedBox(width: RecorderTokens.space3),
+              field,
+              const SizedBox(height: RecorderTokens.space2),
+              Row(
+                children: [
+                  dateBtn,
+                  const SizedBox(width: RecorderTokens.space3),
+                  meta,
+                ],
+              ),
+              const SizedBox(height: RecorderTokens.space2),
               filter,
             ],
-          ),
-        ],
-      );
-    }
+          );
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        field,
-        const SizedBox(height: RecorderTokens.space2),
-        Row(
-          children: [
-            dateBtn,
-            const SizedBox(width: RecorderTokens.space3),
-            meta,
-          ],
-        ),
-        const SizedBox(height: RecorderTokens.space2),
-        filter,
-      ],
-    );
+    return Container(key: widget.tutorialHeaderKey, child: content);
   }
 
   @override
@@ -641,8 +654,7 @@ class SearchScreenState extends State<SearchScreen> {
             Text("Server URL: ${widget.serverUrl}",
                 style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: RecorderTokens.space2),
-            Text("Error: $msg",
-                style: Theme.of(context).textTheme.labelMedium),
+            Text("Error: $msg", style: Theme.of(context).textTheme.labelMedium),
             if (auto) ...[
               const SizedBox(height: RecorderTokens.space2),
               Row(

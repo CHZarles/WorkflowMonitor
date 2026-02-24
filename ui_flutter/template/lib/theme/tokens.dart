@@ -13,6 +13,9 @@ class RecorderTokens {
   static const radiusS = 8.0;
   static const radiusM = 12.0;
   static const radiusL = 16.0;
+
+  // Backward-compatible alias used by some mobile widgets.
+  static const radius3 = radiusM;
 }
 
 class RecorderLightColors {
@@ -60,4 +63,3 @@ class RecorderDarkColors {
 
   static const errorContainer = Color(0xFF392230);
 }
-

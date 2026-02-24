@@ -23,12 +23,16 @@ class SettingsScreen extends StatefulWidget {
     required this.serverUrl,
     required this.onServerUrlChanged,
     this.isActive = false,
+    this.onOpenTutorial,
+    this.tutorialPrivacyKey,
   });
 
   final CoreClient client;
   final String serverUrl;
   final Future<void> Function(String url) onServerUrlChanged;
   final bool isActive;
+  final VoidCallback? onOpenTutorial;
+  final GlobalKey? tutorialPrivacyKey;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -260,7 +264,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final latest = _latestRelease;
     final url = (latest?.assetUrl ?? "").trim();
     if (latest == null || url.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No update asset found.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("No update asset found.")));
       return;
     }
 
@@ -268,10 +273,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text("Update to ${latest.tag}?"),
-        content: const Text("RecorderPhone will close, install the update, then restart."),
+        content: const Text(
+            "RecorderPhone will close, install the update, then restart."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Update & restart")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Update & restart")),
         ],
       ),
     );
@@ -312,7 +322,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final u = Uri.tryParse(widget.serverUrl.trim());
     if (u == null) return false;
     final host = u.host.trim().toLowerCase();
-    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+    return host == "127.0.0.1" ||
+        host == "localhost" ||
+        host == "0.0.0.0" ||
+        host == "::1";
   }
 
   Future<void> _startAgent({required bool restart}) async {
@@ -321,7 +334,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!_isLocalServerUrl()) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Agent can only start when Server URL is localhost.")),
+        const SnackBar(
+            content:
+                Text("Agent can only start when Server URL is localhost.")),
       );
       return;
     }
@@ -451,7 +466,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? const Duration(seconds: 15)
           : const Duration(seconds: 6),
     );
-    await Future.wait([_checkHealth(), _loadCoreSettings(), _loadRules(), _loadNow(), _loadEvents()]);
+    await Future.wait([
+      _checkHealth(),
+      _loadCoreSettings(),
+      _loadRules(),
+      _loadNow(),
+      _loadEvents()
+    ]);
   }
 
   Future<void> _checkHealth() async {
@@ -495,8 +516,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _coreSettings = s;
         _blockMinutes.text = _minsFromSeconds(s.blockSeconds).toString();
-        _idleCutoffMinutes.text = _minsFromSeconds(s.idleCutoffSeconds).toString();
-        _reviewMinMinutes.text = _minsFromSeconds(s.reviewMinSeconds).toString();
+        _idleCutoffMinutes.text =
+            _minsFromSeconds(s.idleCutoffSeconds).toString();
+        _reviewMinMinutes.text =
+            _minsFromSeconds(s.reviewMinSeconds).toString();
         _reviewToastRepeatMinutes.text = s.reviewNotifyRepeatMinutes.toString();
         _reviewNotifyWhenPaused = s.reviewNotifyWhenPaused;
         _reviewNotifyWhenIdle = s.reviewNotifyWhenIdle;
@@ -517,11 +540,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final blockMin = int.tryParse(_blockMinutes.text.trim());
     final idleMin = int.tryParse(_idleCutoffMinutes.text.trim());
     if (blockMin == null || blockMin < 1) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid block minutes")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("Invalid block minutes")));
       return;
     }
     if (idleMin == null || idleMin < 1) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid idle cutoff minutes")));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Invalid idle cutoff minutes")));
       return;
     }
 
@@ -541,13 +566,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _coreSettings = s;
         _blockMinutes.text = _minsFromSeconds(s.blockSeconds).toString();
-        _idleCutoffMinutes.text = _minsFromSeconds(s.idleCutoffSeconds).toString();
+        _idleCutoffMinutes.text =
+            _minsFromSeconds(s.idleCutoffSeconds).toString();
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Core settings saved")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("Core settings saved")));
     } catch (e) {
       if (!mounted) return;
       setState(() => _coreSettingsError = e.toString());
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Save failed: $e")));
     } finally {
       if (mounted) {
         setState(() {
@@ -586,7 +614,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _coreSettingsError = e.toString());
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Privacy save failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Privacy save failed: $e")));
       // Best-effort: reload persisted state to avoid UI drift.
       unawaited(_loadCoreSettings());
     } finally {
@@ -604,7 +633,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (s == null) return false;
     final expectedBlock = _minsFromSeconds(s.blockSeconds).toString();
     final expectedIdle = _minsFromSeconds(s.idleCutoffSeconds).toString();
-    return _blockMinutes.text.trim() != expectedBlock || _idleCutoffMinutes.text.trim() != expectedIdle;
+    return _blockMinutes.text.trim() != expectedBlock ||
+        _idleCutoffMinutes.text.trim() != expectedIdle;
   }
 
   bool _reviewDirty() {
@@ -618,7 +648,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _reviewNotifyWhenIdle != s.reviewNotifyWhenIdle;
   }
 
-  void _scheduleReviewSave({Duration delay = const Duration(milliseconds: 700)}) {
+  void _scheduleReviewSave(
+      {Duration delay = const Duration(milliseconds: 700)}) {
     _reviewSaveDebounce?.cancel();
     _reviewSaveDebounce = Timer(delay, () {
       _saveReviewSettings().catchError((_) {});
@@ -654,7 +685,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() {
         _coreSettings = s;
-        _reviewMinMinutes.text = _minsFromSeconds(s.reviewMinSeconds).toString();
+        _reviewMinMinutes.text =
+            _minsFromSeconds(s.reviewMinSeconds).toString();
         _reviewToastRepeatMinutes.text = s.reviewNotifyRepeatMinutes.toString();
         _reviewNotifyWhenPaused = s.reviewNotifyWhenPaused;
         _reviewNotifyWhenIdle = s.reviewNotifyWhenIdle;
@@ -699,8 +731,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             "This stores full executable paths (and may contain usernames / project folders).\n\nYou can always turn it off later.",
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Enable")),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text("Cancel")),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text("Enable")),
           ],
         ),
       );
@@ -793,7 +829,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (q.isEmpty) return out;
 
     return out
-        .where((r) => "${r.kind} ${r.value} ${r.action}".toLowerCase().contains(q))
+        .where(
+            (r) => "${r.kind} ${r.value} ${r.action}".toLowerCase().contains(q))
         .toList();
   }
 
@@ -838,7 +875,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _editServerUrl() async {
-    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    final isAndroid =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     final controller = TextEditingController(text: widget.serverUrl);
     final saved = await showDialog<String>(
       context: context,
@@ -877,11 +915,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   runSpacing: RecorderTokens.space2,
                   children: [
                     OutlinedButton(
-                      onPressed: () => controller.text = "http://10.0.2.2:17600",
+                      onPressed: () =>
+                          controller.text = "http://10.0.2.2:17600",
                       child: const Text("Use 10.0.2.2"),
                     ),
                     OutlinedButton(
-                      onPressed: () => controller.text = "http://127.0.0.1:17600",
+                      onPressed: () =>
+                          controller.text = "http://127.0.0.1:17600",
                       child: const Text("Use 127.0.0.1"),
                     ),
                   ],
@@ -891,7 +931,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text("Save"),
@@ -938,8 +979,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 initialValue: action,
                 decoration: const InputDecoration(labelText: "Action"),
                 items: const [
-                  DropdownMenuItem(value: "drop", child: Text("Drop (do not store)")),
-                  DropdownMenuItem(value: "mask", child: Text("Mask (store as __hidden__)")),
+                  DropdownMenuItem(
+                      value: "drop", child: Text("Drop (do not store)")),
+                  DropdownMenuItem(
+                      value: "mask", child: Text("Mask (store as __hidden__)")),
                 ],
                 onChanged: (v) => setLocal(() => action = v ?? "drop"),
               ),
@@ -951,7 +994,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("Cancel")),
             FilledButton(
               onPressed: () {
                 final value = valueController.text.trim();
@@ -974,10 +1019,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await widget.client.upsertPrivacyRule(upsert);
       await _loadRules();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Rule saved")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("Rule saved")));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Save failed: $e")));
     }
   }
 
@@ -988,7 +1035,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: const Text("Delete rule?"),
         content: Text("${rule.kind}: ${rule.value}\nAction: ${rule.action}"),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text("Delete"),
@@ -1002,10 +1051,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await widget.client.deletePrivacyRule(rule.id);
       await _loadRules();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Rule deleted")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("Rule deleted")));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Delete failed: $e")));
     }
   }
 
@@ -1017,9 +1068,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("Delete this day?"),
-        content: Text("This will delete all events and reviews for:\n$date\n\nThis cannot be undone."),
+        content: Text(
+            "This will delete all events and reviews for:\n$date\n\nThis cannot be undone."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text("Delete"),
@@ -1038,11 +1092,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       await _loadEvents();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Deleted ${res.eventsDeleted} events, ${res.reviewsDeleted} reviews")),
+        SnackBar(
+            content: Text(
+                "Deleted ${res.eventsDeleted} events, ${res.reviewsDeleted} reviews")),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Delete failed: $e")));
     } finally {
       if (mounted) setState(() => _deleteDayLoading = false);
     }
@@ -1057,7 +1114,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           "This will delete all events and all block reviews.\n\nPrivacy rules and Core settings will be kept.\n\nThis cannot be undone.",
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text("Wipe all"),
@@ -1073,17 +1132,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       await _loadEvents();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Wiped ${res.eventsDeleted} events, ${res.reviewsDeleted} reviews")),
+        SnackBar(
+            content: Text(
+                "Wiped ${res.eventsDeleted} events, ${res.reviewsDeleted} reviews")),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Wipe failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Wipe failed: $e")));
     } finally {
       if (mounted) setState(() => _wipeAllLoading = false);
     }
   }
 
-  Future<void> _showTextExport({required String title, required Future<String> Function() load}) async {
+  Future<void> _showTextExport(
+      {required String title, required Future<String> Function() load}) async {
     try {
       final text = await load();
       if (!mounted) return;
@@ -1101,17 +1164,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 await Clipboard.setData(ClipboardData(text: text));
                 if (!ctx.mounted) return;
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Copied to clipboard")));
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Copied to clipboard")));
               },
               child: const Text("Copy"),
             ),
-            FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close")),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("Close")),
           ],
         ),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Export failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Export failed: $e")));
     }
   }
 
@@ -1137,6 +1204,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListView(
       padding: const EdgeInsets.all(RecorderTokens.space4),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.school_outlined),
+            title: const Text("新手引导"),
+            subtitle: const Text("用 1 分钟了解 Now、时间轴、复盘和隐私设置。"),
+            trailing: FilledButton(
+              onPressed: widget.onOpenTutorial,
+              child: const Text("开始"),
+            ),
+            onTap: widget.onOpenTutorial,
+          ),
+        ),
+        const SizedBox(height: RecorderTokens.space6),
         Text("Server", style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: RecorderTokens.space3),
         Card(
@@ -1160,8 +1240,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          healthMeta.isEmpty ? "Health: $healthText" : "Health: $healthText · $healthMeta",
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: healthColor),
+                          healthMeta.isEmpty
+                              ? "Health: $healthText"
+                              : "Health: $healthText · $healthMeta",
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: healthColor),
                         ),
                       ),
                       if (_healthError != null)
@@ -1172,7 +1257,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               title: const Text("Health error"),
                               content: Text(_healthError!),
                               actions: [
-                                FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close")),
+                                FilledButton(
+                                    onPressed: () => Navigator.pop(ctx),
+                                    child: const Text("Close")),
                               ],
                             ),
                           ),
@@ -1223,12 +1310,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   Builder(
                                     builder: (context) {
                                       final service = _healthInfo?.service;
-                                      final coreLooksHealthy = _healthOk == true && service == "recorder_core";
-                                      final alreadyRunning = _isLocalServerUrl() && coreLooksHealthy;
-                                      final startEnabled = !_agentBusy && _isLocalServerUrl() && !alreadyRunning;
+                                      final coreLooksHealthy =
+                                          _healthOk == true &&
+                                              service == "recorder_core";
+                                      final alreadyRunning =
+                                          _isLocalServerUrl() &&
+                                              coreLooksHealthy;
+                                      final startEnabled = !_agentBusy &&
+                                          _isLocalServerUrl() &&
+                                          !alreadyRunning;
                                       return FilledButton.icon(
-                                        onPressed: startEnabled ? () => _startAgent(restart: false) : null,
-                                        icon: Icon(alreadyRunning ? Icons.check_circle_outline : Icons.play_arrow),
+                                        onPressed: startEnabled
+                                            ? () => _startAgent(restart: false)
+                                            : null,
+                                        icon: Icon(alreadyRunning
+                                            ? Icons.check_circle_outline
+                                            : Icons.play_arrow),
                                         label: Text(
                                           _agentBusy
                                               ? "Starting…"
@@ -1240,7 +1337,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     },
                                   ),
                                   OutlinedButton.icon(
-                                    onPressed: _agentBusy ? null : () => _startAgent(restart: true),
+                                    onPressed: _agentBusy
+                                        ? null
+                                        : () => _startAgent(restart: true),
                                     icon: const Icon(Icons.restart_alt),
                                     label: const Text("Restart"),
                                   ),
@@ -1271,7 +1370,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   leading: Icon(
                                     Icons.power_settings_new,
                                     size: 18,
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
                                   ),
                                   title: const Text("Start with Windows"),
                                   subtitle: Text(
@@ -1285,27 +1386,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       ? const SizedBox(
                                           width: 20,
                                           height: 20,
-                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
                                         )
                                       : Switch(
                                           value: _startupEnabled == true,
                                           onChanged: _startupEnabled == null
                                               ? null
                                               : (v) {
-                                                  _setStartupEnabled(v).catchError((e) {
+                                                  _setStartupEnabled(v)
+                                                      .catchError((e) {
                                                     final msg = e.toString();
-                                                    ScaffoldMessenger.of(context).showSnackBar(
-                                                      SnackBar(content: Text("Startup update failed: $msg")),
+                                                    ScaffoldMessenger.of(
+                                                            context)
+                                                        .showSnackBar(
+                                                      SnackBar(
+                                                          content: Text(
+                                                              "Startup update failed: $msg")),
                                                     );
                                                   });
                                                 },
                                         ),
                                 ),
                                 Padding(
-                                  padding: const EdgeInsets.only(left: 2, top: 2),
+                                  padding:
+                                      const EdgeInsets.only(left: 2, top: 2),
                                   child: Text(
                                     "Close window → keeps running in tray. Use tray menu → Exit to quit.",
-                                    style: Theme.of(context).textTheme.labelMedium,
+                                    style:
+                                        Theme.of(context).textTheme.labelMedium,
                                   ),
                                 ),
                               ],
@@ -1336,7 +1445,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       final tag = (b?.gitTag ?? "").trim();
                       final desc = (b?.gitDescribe ?? "").trim();
                       final sha = _shortSha(b?.git);
-                      final cur = tag.isNotEmpty ? tag : (desc.isNotEmpty ? desc : (sha.isNotEmpty ? sha : "unknown"));
+                      final cur = tag.isNotEmpty
+                          ? tag
+                          : (desc.isNotEmpty
+                              ? desc
+                              : (sha.isNotEmpty ? sha : "unknown"));
 
                       final coreV = (b?.coreVersion ?? "").trim();
                       final colV = (b?.collectorVersion ?? "").trim();
@@ -1358,7 +1471,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     enabled: !_updatesInstalling,
                     decoration: const InputDecoration(
                       labelText: "GitHub repo (owner/name)",
-                      helperText: "Used for update checks via GitHub Releases (public repos work without tokens).",
+                      helperText:
+                          "Used for update checks via GitHub Releases (public repos work without tokens).",
                     ),
                     onChanged: (_) => _scheduleSaveUpdateRepo(),
                     onSubmitted: (_) => _saveUpdateRepo(_updateRepo.text),
@@ -1389,7 +1503,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         )
                       else
                         Icon(
-                          _updateAvailable ? Icons.system_update_alt : Icons.check_circle_outline,
+                          _updateAvailable
+                              ? Icons.system_update_alt
+                              : Icons.check_circle_outline,
                           size: 18,
                           color: _updateAvailable
                               ? Theme.of(context).colorScheme.primary
@@ -1403,8 +1519,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             final latestTag = latest?.tag ?? "";
                             final last = _formatLocalTime(_updateLastCheckedAt);
                             final status = _updateAvailable
-                                ? (latestTag.isEmpty ? "Update available" : "Update available: $latestTag")
-                                : (latestTag.isEmpty ? "No update info yet" : "Latest: $latestTag");
+                                ? (latestTag.isEmpty
+                                    ? "Update available"
+                                    : "Update available: $latestTag")
+                                : (latestTag.isEmpty
+                                    ? "No update info yet"
+                                    : "Latest: $latestTag");
                             return Text(
                               last.isEmpty ? status : "$status · checked $last",
                               style: Theme.of(context).textTheme.labelMedium,
@@ -1413,7 +1533,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       OutlinedButton.icon(
-                        onPressed: (_updatesLoading || _updatesInstalling) ? null : () => _checkUpdates(force: true),
+                        onPressed: (_updatesLoading || _updatesInstalling)
+                            ? null
+                            : () => _checkUpdates(force: true),
                         icon: const Icon(Icons.refresh),
                         label: const Text("Check"),
                       ),
@@ -1424,7 +1546,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     FilledButton.icon(
                       onPressed: _updatesInstalling ? null : _installUpdate,
                       icon: const Icon(Icons.system_update_alt),
-                      label: Text(_updatesInstalling ? "Updating…" : "Update & restart"),
+                      label: Text(_updatesInstalling
+                          ? "Updating…"
+                          : "Update & restart"),
                     ),
                   ],
                   if (_updatesError != null) ...[
@@ -1444,7 +1568,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
         Row(
           children: [
-            Expanded(child: Text("Diagnostics", style: Theme.of(context).textTheme.titleMedium)),
+            Expanded(
+                child: Text("Diagnostics",
+                    style: Theme.of(context).textTheme.titleMedium)),
             OutlinedButton.icon(
               onPressed: _refreshAll,
               icon: const Icon(Icons.refresh),
@@ -1493,40 +1619,67 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   }
 
                   for (final e in _events) {
-                    if (e.source == "browser_extension" && e.event == "tab_active" && e.activity != "audio") {
+                    if (e.source == "browser_extension" &&
+                        e.event == "tab_active" &&
+                        e.activity != "audio") {
                       lastTabFocus = e;
                       break;
                     }
                   }
-                  lastTabAudio = _latestEvent(event: "tab_active", source: "browser_extension", activity: "audio");
-                  lastTabAudioStop = _latestEvent(event: "tab_audio_stop", source: "browser_extension");
-                  lastApp = _latestEvent(event: "app_active", source: "windows_collector");
-                  lastAppAudio = _latestEvent(event: "app_audio", source: "windows_collector");
-                  lastAppAudioStop = _latestEvent(event: "app_audio_stop", source: "windows_collector");
+                  lastTabAudio = _latestEvent(
+                      event: "tab_active",
+                      source: "browser_extension",
+                      activity: "audio");
+                  lastTabAudioStop = _latestEvent(
+                      event: "tab_audio_stop", source: "browser_extension");
+                  lastApp = _latestEvent(
+                      event: "app_active", source: "windows_collector");
+                  lastAppAudio = _latestEvent(
+                      event: "app_audio", source: "windows_collector");
+                  lastAppAudioStop = _latestEvent(
+                      event: "app_audio_stop", source: "windows_collector");
                   lastAny = _events.isEmpty ? null : _events.first;
                 }
 
                 bool isBrowserLabel(String label) {
                   final v = label.trim().toLowerCase();
-                  return v == "chrome" || v == "msedge" || v == "edge" || v == "brave" || v == "vivaldi" || v == "opera" || v == "firefox";
+                  return v == "chrome" ||
+                      v == "msedge" ||
+                      v == "edge" ||
+                      v == "brave" ||
+                      v == "vivaldi" ||
+                      v == "opera" ||
+                      v == "firefox";
                 }
 
                 final focusTtlSeconds = snap?.focusTtlSeconds ?? (3 * 60);
-                final focusTtl = Duration(seconds: focusTtlSeconds.clamp(30, 3600));
-                final focusFreshMinutes = (focusTtl.inSeconds / 60).ceil().clamp(1, 120);
+                final focusTtl =
+                    Duration(seconds: focusTtlSeconds.clamp(30, 3600));
+                final focusFreshMinutes =
+                    (focusTtl.inSeconds / 60).ceil().clamp(1, 120);
 
-                final lastAppTs = lastApp == null ? null : _parseLocalTs(lastApp.ts);
-                final lastAppAge = lastAppTs == null ? null : DateTime.now().difference(lastAppTs);
+                final lastAppTs =
+                    lastApp == null ? null : _parseLocalTs(lastApp.ts);
+                final lastAppAge = lastAppTs == null
+                    ? null
+                    : DateTime.now().difference(lastAppTs);
                 final lastAppLabel = displayEntity(lastApp?.entity);
-                final appLooksLikeBrowser = lastApp != null && isBrowserLabel(lastAppLabel);
+                final appLooksLikeBrowser =
+                    lastApp != null && isBrowserLabel(lastAppLabel);
                 final appIsFresh = lastAppAge != null && lastAppAge <= focusTtl;
                 final browserLooksActive = appLooksLikeBrowser && appIsFresh;
 
-                final lastTabTs = lastTabFocus == null ? null : _parseLocalTs(lastTabFocus.ts);
-                final lastTabAge = lastTabTs == null ? null : DateTime.now().difference(lastTabTs);
-                final tabLooksStale = lastTabAge == null || lastTabAge > (focusTtl + const Duration(seconds: 60));
+                final lastTabTs = lastTabFocus == null
+                    ? null
+                    : _parseLocalTs(lastTabFocus.ts);
+                final lastTabAge = lastTabTs == null
+                    ? null
+                    : DateTime.now().difference(lastTabTs);
+                final tabLooksStale = lastTabAge == null ||
+                    lastTabAge > (focusTtl + const Duration(seconds: 60));
 
-                bool hasAnyTabEvent = lastTabFocus != null || lastTabAudio != null;
+                bool hasAnyTabEvent =
+                    lastTabFocus != null || lastTabAudio != null;
                 String anyTabTitle() {
                   final t1 = (lastTabFocus?.title ?? "").trim();
                   if (t1.isNotEmpty) return t1;
@@ -1537,7 +1690,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 final tabHasTitle = anyTabTitle().isNotEmpty;
                 final appHasTitle = ((lastApp?.title ?? "").trim()).isNotEmpty;
-                final appTitleUseful = lastApp != null && !appLooksLikeBrowser; // browser window titles are noisy
+                final appTitleUseful = lastApp != null &&
+                    !appLooksLikeBrowser; // browser window titles are noisy
 
                 Widget titleGuide() {
                   final scheme = Theme.of(context).colorScheme;
@@ -1572,13 +1726,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     final tips = <String>[];
                     if (hasAnyTabEvent && !tabHasTitle) {
-                      tips.add("Browser: enable “Send tab title” in the extension popup, then click “Force send”.");
+                      tips.add(
+                          "Browser: enable “Send tab title” in the extension popup, then click “Force send”.");
                     }
                     if (!hasAnyTabEvent) {
-                      tips.add("Browser: no tab events yet. Switch a tab or click “Force send” in the extension popup.");
+                      tips.add(
+                          "Browser: no tab events yet. Switch a tab or click “Force send” in the extension popup.");
                     }
                     if (appTitleUseful && !appHasTitle) {
-                      tips.add("Windows: start windows_collector with --send-title to capture window titles/workspaces.");
+                      tips.add(
+                          "Windows: start windows_collector with --send-title to capture window titles/workspaces.");
                     }
 
                     subtitle = tips.isEmpty
@@ -1606,8 +1763,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Container(
                       decoration: BoxDecoration(
                         color: scheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
-                        border: Border.all(color: scheme.outline.withValues(alpha: 0.10)),
+                        borderRadius:
+                            BorderRadius.circular(RecorderTokens.radiusM),
+                        border: Border.all(
+                            color: scheme.outline.withValues(alpha: 0.10)),
                       ),
                       padding: const EdgeInsets.all(RecorderTokens.space3),
                       child: Row(
@@ -1619,9 +1778,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(title, style: Theme.of(context).textTheme.labelLarge),
+                                Text(title,
+                                    style:
+                                        Theme.of(context).textTheme.labelLarge),
                                 const SizedBox(height: 4),
-                                Text(subtitle, style: Theme.of(context).textTheme.labelMedium),
+                                Text(subtitle,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelMedium),
                               ],
                             ),
                           ),
@@ -1657,7 +1821,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   final ts = _parseLocalTs(e.ts);
                   final age = ts == null ? null : DateTime.now().difference(ts);
-                  final entity = (e.entity ?? "").trim().isEmpty ? "(no entity)" : e.entity!.trim();
+                  final entity = (e.entity ?? "").trim().isEmpty
+                      ? "(no entity)"
+                      : e.entity!.trim();
                   final fresh = age != null && age.inMinutes < freshnessMinutes;
 
                   final act = (e.activity ?? "").trim();
@@ -1668,10 +1834,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   final titleText = (e.title ?? "").trim();
                   final secondLine = titleText.isNotEmpty
                       ? titleText
-                      : (missingTitleHint != null && missingTitleHint.trim().isNotEmpty)
+                      : (missingTitleHint != null &&
+                              missingTitleHint.trim().isNotEmpty)
                           ? missingTitleHint
                           : (!fresh && staleHint != null ? staleHint : null);
-                  final subtitle = secondLine == null ? baseSubtitle : "$baseSubtitle\n$secondLine";
+                  final subtitle = secondLine == null
+                      ? baseSubtitle
+                      : "$baseSubtitle\n$secondLine";
                   final scheme = Theme.of(context).colorScheme;
 
                   return ListTile(
@@ -1681,7 +1850,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       color: fresh ? scheme.primary : scheme.onSurfaceVariant,
                     ),
                     title: Text(title),
-                    subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(subtitle,
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
                   );
                 }
 
@@ -1693,7 +1863,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         padding: const EdgeInsets.all(RecorderTokens.space2),
                         child: Row(
                           children: [
-                            Icon(Icons.schedule, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                            Icon(Icons.schedule,
+                                size: 16,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant),
                             const SizedBox(width: RecorderTokens.space1),
                             Expanded(
                               child: Text(
@@ -1709,7 +1883,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         padding: const EdgeInsets.all(RecorderTokens.space2),
                         child: Row(
                           children: [
-                            Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                            Icon(Icons.info_outline,
+                                size: 16,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant),
                             const SizedBox(width: RecorderTokens.space1),
                             Expanded(
                               child: Text(
@@ -1722,12 +1900,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ],
                         ),
                       ),
-                    if (browserLooksActive && (lastTabFocus == null || tabLooksStale))
+                    if (browserLooksActive &&
+                        (lastTabFocus == null || tabLooksStale))
                       Padding(
                         padding: const EdgeInsets.all(RecorderTokens.space2),
                         child: Row(
                           children: [
-                            Icon(Icons.warning_amber_rounded, size: 16, color: Theme.of(context).colorScheme.tertiary),
+                            Icon(Icons.warning_amber_rounded,
+                                size: 16,
+                                color: Theme.of(context).colorScheme.tertiary),
                             const SizedBox(width: RecorderTokens.space1),
                             const Expanded(
                               child: Text(
@@ -1742,7 +1923,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     tile(
                       title: "Browser tab (focus)",
                       e: lastTabFocus,
-                      emptyHint: "No tab_active yet. Open the extension popup and ensure Enable tracking is ON.",
+                      emptyHint:
+                          "No tab_active yet. Open the extension popup and ensure Enable tracking is ON.",
                       missingTitleHint: _storeTitles
                           ? "No title field. Enable “Send tab title” in the extension, then click “Force send”."
                           : "Titles are OFF (L1). Turn on “Store window/tab titles (L2)” below to see tab titles.",
@@ -1755,37 +1937,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     tile(
                       title: "Browser tab (background audio)",
                       e: lastTabAudio ?? lastTabAudioStop,
-                      emptyHint: "No background-audio tab yet. Enable “Track background audio” in the extension, then play audio with the browser in background.",
+                      emptyHint:
+                          "No background-audio tab yet. Enable “Track background audio” in the extension, then play audio with the browser in background.",
                       missingTitleHint: _storeTitles
                           ? "No title field. Enable “Send tab title” in the extension, then click “Force send”."
                           : "Titles are OFF (L1). Turn on “Store window/tab titles (L2)” below to see tab titles.",
-                      staleHint: "This only reports when the browser is not focused but an audible tab is playing.",
+                      staleHint:
+                          "This only reports when the browser is not focused but an audible tab is playing.",
                       freshnessMinutes: 2,
                     ),
                     const Divider(height: 1),
                     tile(
                       title: "Windows app events",
                       e: lastApp,
-                      emptyHint: "No app_active yet. Start windows_collector.exe and switch apps a few times.",
+                      emptyHint:
+                          "No app_active yet. Start windows_collector.exe and switch apps a few times.",
                       missingTitleHint: _storeTitles
                           ? "No title field. Start windows_collector with --send-title."
                           : "Titles are OFF (L1). Turn on “Store window/tab titles (L2)” below to see window titles/workspaces.",
-                      staleHint: "If windows_collector isn't running, this will go stale. Restart it to resume events.",
+                      staleHint:
+                          "If windows_collector isn't running, this will go stale. Restart it to resume events.",
                       freshnessMinutes: focusFreshMinutes,
                     ),
                     const Divider(height: 1),
                     tile(
                       title: "Windows background audio (app)",
                       e: lastAppAudio ?? lastAppAudioStop,
-                      emptyHint: "No app_audio yet. Start windows_collector.exe (default track-audio ON) and play music in a desktop app (e.g. QQ Music).",
-                      staleHint: "This only reports when a non-browser app is producing audio. If you're only using browser audio, check the extension's background-audio tile instead.",
+                      emptyHint:
+                          "No app_audio yet. Start windows_collector.exe (default track-audio ON) and play music in a desktop app (e.g. QQ Music).",
+                      staleHint:
+                          "This only reports when a non-browser app is producing audio. If you're only using browser audio, check the extension's background-audio tile instead.",
                       freshnessMinutes: 2,
                     ),
                     const Divider(height: 1),
                     tile(
                       title: "Latest event (any)",
                       e: lastAny,
-                      emptyHint: "No events yet. Install the extension / run collectors, then switch apps or tabs.",
+                      emptyHint:
+                          "No events yet. Install the extension / run collectors, then switch apps or tabs.",
                     ),
                   ],
                 );
@@ -1809,7 +1998,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     controller: _blockMinutes,
                     decoration: const InputDecoration(
                       labelText: "Block length (minutes)",
-                      helperText: "Controls block segmentation and review cadence (including history).",
+                      helperText:
+                          "Controls block segmentation and review cadence (including history).",
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -1827,13 +2017,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Builder(
                     builder: (context) {
                       final dirty = _blockIdleDirty();
-                      if (!dirty && !_coreNumbersSaving) return const SizedBox.shrink();
+                      if (!dirty && !_coreNumbersSaving)
+                        return const SizedBox.shrink();
                       return Padding(
-                        padding: const EdgeInsets.only(top: RecorderTokens.space3),
+                        padding:
+                            const EdgeInsets.only(top: RecorderTokens.space3),
                         child: FilledButton.icon(
-                          onPressed: (_coreNumbersSaving || !dirty) ? null : _saveCoreSettings,
+                          onPressed: (_coreNumbersSaving || !dirty)
+                              ? null
+                              : _saveCoreSettings,
                           icon: const Icon(Icons.save_outlined),
-                          label: _coreNumbersSaving ? const Text("Saving…") : const Text("Save block/idle"),
+                          label: _coreNumbersSaving
+                              ? const Text("Saving…")
+                              : const Text("Save block/idle"),
                         ),
                       );
                     },
@@ -1841,12 +2037,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: RecorderTokens.space3),
                   const Divider(),
                   const SizedBox(height: RecorderTokens.space2),
-                  Text("Review reminders", style: Theme.of(context).textTheme.titleSmall),
+                  Text("Review reminders",
+                      style: Theme.of(context).textTheme.titleSmall),
                   const SizedBox(height: RecorderTokens.space2),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      Icon(Icons.info_outline,
+                          size: 16,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant),
                       const SizedBox(width: RecorderTokens.space1),
                       Expanded(
                         child: Text(
@@ -1861,8 +2061,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     controller: _reviewMinMinutes,
                     enabled: !_coreSettingsSaving,
                     decoration: const InputDecoration(
-                      labelText: "Min block duration to require review (minutes)",
-                      helperText: "Only blocks longer than this can become due (default 5m).",
+                      labelText:
+                          "Min block duration to require review (minutes)",
+                      helperText:
+                          "Only blocks longer than this can become due (default 5m).",
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -1874,7 +2076,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     enabled: !_coreSettingsSaving,
                     decoration: const InputDecoration(
                       labelText: "Repeat interval (minutes)",
-                      helperText: "Minimum minutes between reminders for the same due block (toast + in-app prompt). Default 10m.",
+                      helperText:
+                          "Minimum minutes between reminders for the same due block (toast + in-app prompt). Default 10m.",
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -1887,11 +2090,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? null
                         : (v) {
                             setState(() => _reviewNotifyWhenPaused = v);
-                            _scheduleReviewSave(delay: const Duration(milliseconds: 200));
+                            _scheduleReviewSave(
+                                delay: const Duration(milliseconds: 200));
                           },
                     contentPadding: EdgeInsets.zero,
                     title: const Text("Notify even when tracking is paused"),
-                    subtitle: const Text("Applies to Windows toast + in-app prompt."),
+                    subtitle:
+                        const Text("Applies to Windows toast + in-app prompt."),
                   ),
                   SwitchListTile.adaptive(
                     value: _reviewNotifyWhenIdle,
@@ -1899,16 +2104,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? null
                         : (v) {
                             setState(() => _reviewNotifyWhenIdle = v);
-                            _scheduleReviewSave(delay: const Duration(milliseconds: 200));
+                            _scheduleReviewSave(
+                                delay: const Duration(milliseconds: 200));
                           },
                     contentPadding: EdgeInsets.zero,
                     title: const Text("Notify even when PC is idle"),
-                    subtitle: const Text("Applies to Windows toast (collector)."),
+                    subtitle:
+                        const Text("Applies to Windows toast (collector)."),
                   ),
                   Padding(
                     padding: const EdgeInsets.only(top: RecorderTokens.space1),
                     child: Text(
-                      _reviewSaving ? "Saving review reminders…" : "Review reminder changes are saved automatically.",
+                      _reviewSaving
+                          ? "Saving review reminders…"
+                          : "Review reminder changes are saved automatically.",
                       style: Theme.of(context).textTheme.labelMedium,
                     ),
                   ),
@@ -1916,7 +2125,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      Icon(Icons.info_outline,
+                          size: 16,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant),
                       const SizedBox(width: RecorderTokens.space1),
                       Expanded(
                         child: Text(
@@ -1929,21 +2141,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: RecorderTokens.space3),
                   const Divider(),
                   const SizedBox(height: RecorderTokens.space2),
-                  Text("Privacy (Core)", style: Theme.of(context).textTheme.titleSmall),
+                  Text("Privacy (Core)",
+                      style: Theme.of(context).textTheme.titleSmall),
                   const SizedBox(height: RecorderTokens.space2),
-                  SegmentedButton<_PrivacyLevel>(
-                    segments: const [
-                      ButtonSegment(value: _PrivacyLevel.l1, label: Text("L1")),
-                      ButtonSegment(value: _PrivacyLevel.l2, label: Text("L2")),
-                      ButtonSegment(value: _PrivacyLevel.l3, label: Text("L3")),
-                    ],
-                    selected: {_privacyLevel()},
-                    onSelectionChanged: _coreSettingsSaving
-                        ? null
-                        : (v) {
-                            final next = v.isEmpty ? _privacyLevel() : v.first;
-                            _choosePrivacyLevel(next);
-                          },
+                  Container(
+                    key: widget.tutorialPrivacyKey,
+                    child: SegmentedButton<_PrivacyLevel>(
+                      segments: const [
+                        ButtonSegment(
+                            value: _PrivacyLevel.l1, label: Text("L1")),
+                        ButtonSegment(
+                            value: _PrivacyLevel.l2, label: Text("L2")),
+                        ButtonSegment(
+                            value: _PrivacyLevel.l3, label: Text("L3")),
+                      ],
+                      selected: {_privacyLevel()},
+                      onSelectionChanged: _coreSettingsSaving
+                          ? null
+                          : (v) {
+                              final next =
+                                  v.isEmpty ? _privacyLevel() : v.first;
+                              _choosePrivacyLevel(next);
+                            },
+                    ),
                   ),
                   const SizedBox(height: RecorderTokens.space2),
                   Text(
@@ -1977,13 +2197,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               final ok = await showDialog<bool>(
                                 context: context,
                                 builder: (ctx) => AlertDialog(
-                                  title: const Text("Enable L3 (high sensitivity)?"),
+                                  title: const Text(
+                                      "Enable L3 (high sensitivity)?"),
                                   content: const Text(
                                     "This stores full executable paths (and may contain usernames / project folders).\n\nYou can always turn it off later.",
                                   ),
                                   actions: [
-                                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-                                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Enable")),
+                                    TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(ctx, false),
+                                        child: const Text("Cancel")),
+                                    FilledButton(
+                                        onPressed: () =>
+                                            Navigator.pop(ctx, true),
+                                        child: const Text("Enable")),
                                   ],
                                 ),
                               );
@@ -1998,12 +2225,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           },
                     contentPadding: EdgeInsets.zero,
                     title: const Text("Store full exe path (high sensitivity)"),
-                    subtitle: const Text("If off, Core drops exePath/pid fields."),
+                    subtitle:
+                        const Text("If off, Core drops exePath/pid fields."),
                   ),
                   Padding(
                     padding: const EdgeInsets.only(top: RecorderTokens.space1),
                     child: Text(
-                      _privacySaving ? "Saving privacy…" : "Privacy changes are saved automatically.",
+                      _privacySaving
+                          ? "Saving privacy…"
+                          : "Privacy changes are saved automatically.",
                       style: Theme.of(context).textTheme.labelMedium,
                     ),
                   ),
@@ -2011,7 +2241,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: RecorderTokens.space1),
                     Row(
                       children: [
-                        Icon(Icons.info_outline, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                        Icon(Icons.info_outline,
+                            size: 16,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
                         const SizedBox(width: RecorderTokens.space1),
                         Expanded(
                           child: Text(
@@ -2041,8 +2274,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: RecorderTokens.space6),
         Row(
           children: [
-            Expanded(child: Text("Privacy rules", style: Theme.of(context).textTheme.titleMedium)),
-            FilledButton.icon(onPressed: _addRule, icon: const Icon(Icons.add), label: const Text("Add")),
+            Expanded(
+                child: Text("Privacy rules",
+                    style: Theme.of(context).textTheme.titleMedium)),
+            FilledButton.icon(
+                onPressed: _addRule,
+                icon: const Icon(Icons.add),
+                label: const Text("Add")),
           ],
         ),
         const SizedBox(height: RecorderTokens.space2),
@@ -2074,7 +2312,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ChoiceChip(
               label: const Text("Domains"),
               selected: _ruleFilter == _RuleFilter.domains,
-              onSelected: (_) => setState(() => _ruleFilter = _RuleFilter.domains),
+              onSelected: (_) =>
+                  setState(() => _ruleFilter = _RuleFilter.domains),
             ),
             ChoiceChip(
               label: const Text("Apps"),
@@ -2113,7 +2352,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 else if (_rules.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(RecorderTokens.space4),
-                    child: Text("No rules yet. Add a domain/app to drop or mask."),
+                    child:
+                        Text("No rules yet. Add a domain/app to drop or mask."),
                   )
                 else
                   ...(() {
@@ -2128,7 +2368,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     }
 
                     IconData icon(PrivacyRule r) {
-                      if (r.action == "mask") return Icons.visibility_off_outlined;
+                      if (r.action == "mask")
+                        return Icons.visibility_off_outlined;
                       return Icons.block;
                     }
 
@@ -2160,7 +2401,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         (r) => ListTile(
                           minVerticalPadding: RecorderTokens.space2,
                           leading: Icon(icon(r), size: 18),
-                          title: Text(r.value, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          title: Text(r.value,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
                           subtitle: Text("${kindLabel(r)} · ${actionLabel(r)}"),
                           trailing: IconButton(
                             onPressed: () => _deleteRule(r),
@@ -2178,7 +2420,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: RecorderTokens.space6),
         Row(
           children: [
-            Expanded(child: Text("Recent events", style: Theme.of(context).textTheme.titleMedium)),
+            Expanded(
+                child: Text("Recent events",
+                    style: Theme.of(context).textTheme.titleMedium)),
             OutlinedButton.icon(
               onPressed: _eventsLoading ? null : _loadEvents,
               icon: const Icon(Icons.refresh),
@@ -2216,7 +2460,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 else if (_events.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(RecorderTokens.space4),
-                    child: Text("No events yet. Install the extension / run collectors, then switch apps or tabs."),
+                    child: Text(
+                        "No events yet. Install the extension / run collectors, then switch apps or tabs."),
                   )
                 else
                   ..._events.take(20).map((e) {
@@ -2226,16 +2471,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     final subtitle = t.isEmpty ? meta : "$meta\n$t";
                     return ListTile(
                       minVerticalPadding: RecorderTokens.space2,
-                      title: Text(entity, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      title: Text(entity,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(subtitle,
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
                       trailing: IconButton(
                         onPressed: e.entity == null
-                          ? null
+                            ? null
                             : () async {
-                                await Clipboard.setData(ClipboardData(text: e.entity!));
+                                await Clipboard.setData(
+                                    ClipboardData(text: e.entity!));
                                 if (!mounted) return;
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text("Copied entity to clipboard")),
+                                  const SnackBar(
+                                      content:
+                                          Text("Copied entity to clipboard")),
                                 );
                               },
                         tooltip: "Copy",
@@ -2273,7 +2523,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: "Markdown export",
                         load: () => widget.client.exportMarkdown(
                           date: _dateLocal.text.trim(),
-                          tzOffsetMinutes: DateTime.now().timeZoneOffset.inMinutes,
+                          tzOffsetMinutes:
+                              DateTime.now().timeZoneOffset.inMinutes,
                         ),
                       ),
                       icon: const Icon(Icons.description_outlined),
@@ -2284,7 +2535,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: "CSV export",
                         load: () => widget.client.exportCsv(
                           date: _dateLocal.text.trim(),
-                          tzOffsetMinutes: DateTime.now().timeZoneOffset.inMinutes,
+                          tzOffsetMinutes:
+                              DateTime.now().timeZoneOffset.inMinutes,
                         ),
                       ),
                       icon: const Icon(Icons.table_chart_outlined),
@@ -2295,26 +2547,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: RecorderTokens.space4),
                 const Divider(),
                 const SizedBox(height: RecorderTokens.space2),
-                Text("Danger zone", style: Theme.of(context).textTheme.titleSmall),
+                Text("Danger zone",
+                    style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: RecorderTokens.space2),
                 FilledButton.icon(
                   style: FilledButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.errorContainer,
-                    foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+                    backgroundColor:
+                        Theme.of(context).colorScheme.errorContainer,
+                    foregroundColor:
+                        Theme.of(context).colorScheme.onErrorContainer,
                   ),
-                  onPressed: _wipeAllLoading || _deleteDayLoading ? null : _wipeAllData,
+                  onPressed: _wipeAllLoading || _deleteDayLoading
+                      ? null
+                      : _wipeAllData,
                   icon: const Icon(Icons.delete_sweep_outlined),
-                  label: _wipeAllLoading ? const Text("Wiping…") : const Text("Wipe ALL data"),
+                  label: _wipeAllLoading
+                      ? const Text("Wiping…")
+                      : const Text("Wipe ALL data"),
                 ),
                 const SizedBox(height: RecorderTokens.space2),
                 FilledButton.icon(
                   style: FilledButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.errorContainer,
-                    foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+                    backgroundColor:
+                        Theme.of(context).colorScheme.errorContainer,
+                    foregroundColor:
+                        Theme.of(context).colorScheme.onErrorContainer,
                   ),
                   onPressed: _deleteDayLoading ? null : _deleteDayData,
                   icon: const Icon(Icons.delete_forever_outlined),
-                  label: _deleteDayLoading ? const Text("Deleting…") : const Text("Delete this day"),
+                  label: _deleteDayLoading
+                      ? const Text("Deleting…")
+                      : const Text("Delete this day"),
                 ),
               ],
             ),

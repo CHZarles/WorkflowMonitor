@@ -5,6 +5,7 @@ import "package:shared_preferences/shared_preferences.dart";
 import "package:window_manager/window_manager.dart";
 
 import "../api/core_client.dart";
+import "../tutorial/app_tutorial.dart";
 import "../utils/desktop_agent.dart";
 import "../utils/tray_controller.dart";
 import "../utils/update_manager.dart";
@@ -41,10 +42,16 @@ class _AppShellState extends State<AppShell> {
   final _todayKey = GlobalKey<TodayScreenState>();
   final _searchKey = GlobalKey<SearchScreenState>();
   final _reportsKey = GlobalKey<ReportsScreenState>();
+  final _tutorialTrackingKey = GlobalKey();
+  final _tutorialNowKey = GlobalKey();
+  final _tutorialTimelineKey = GlobalKey();
+  final _tutorialReviewHeaderKey = GlobalKey();
+  final _tutorialPrivacyKey = GlobalKey();
 
   bool _ready = false;
   int _index = 0;
   bool _handledInitialDeepLink = false;
+  bool _tutorialRunning = false;
 
   String _serverUrl = _defaultServerUrl;
   late CoreClient _client = CoreClient(baseUrl: _serverUrl);
@@ -212,14 +219,16 @@ class _AppShellState extends State<AppShell> {
       if (!auto) return;
 
       var repo = (prefs.getString(_prefUpdateRepo) ?? "").trim();
-      repo = repo.isEmpty ? ((await mgr.defaultGitHubRepo()) ?? "").trim() : repo;
+      repo =
+          repo.isEmpty ? ((await mgr.defaultGitHubRepo()) ?? "").trim() : repo;
       if (repo.isEmpty) return;
 
       final lastIso = (prefs.getString(_prefUpdateLastCheckIso) ?? "").trim();
       if (lastIso.isNotEmpty) {
         try {
           final last = DateTime.parse(lastIso).toLocal();
-          if (DateTime.now().difference(last) < const Duration(hours: 6)) return;
+          if (DateTime.now().difference(last) < const Duration(hours: 6))
+            return;
         } catch (_) {
           // ignore
         }
@@ -227,7 +236,8 @@ class _AppShellState extends State<AppShell> {
 
       final res = await mgr.checkLatest(gitHubRepo: repo);
       try {
-        await prefs.setString(_prefUpdateLastCheckIso, DateTime.now().toIso8601String());
+        await prefs.setString(
+            _prefUpdateLastCheckIso, DateTime.now().toIso8601String());
       } catch (_) {
         // ignore
       }
@@ -483,6 +493,101 @@ class _AppShellState extends State<AppShell> {
 
   void _setIndex(int i) => setState(() => _index = i);
 
+  Future<void> _goToTab(int i) async {
+    if (!mounted) return;
+    setState(() => _index = i);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  Future<void> _ensureVisible(GlobalKey key) async {
+    final ctx = key.currentContext;
+    if (ctx == null) return;
+    try {
+      await Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.15,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await WidgetsBinding.instance.endOfFrame;
+    } catch (_) {
+      // best effort
+    }
+  }
+
+  Future<void> _openTutorial() async {
+    if (_tutorialRunning) return;
+    setState(() => _tutorialRunning = true);
+    try {
+      final runner = TutorialRunner(
+        context: context,
+        steps: [
+          const TutorialStep(
+            title: "欢迎使用 RecorderPhone",
+            body:
+                "RecorderPhone 会在本地记录你在电脑/浏览器上的使用情况，并按时间段（Block）帮你复盘。\n\n接下来用 1 分钟了解核心功能。",
+          ),
+          TutorialStep(
+            title: "采集开关（Tracking）",
+            body: "这里可以暂停/恢复采集。需要临时不记录时，建议先 Pause，避免“空白/噪音”数据进入复盘。",
+            targetKey: _tutorialTrackingKey,
+          ),
+          TutorialStep(
+            title: "Now：你正在用什么",
+            body:
+                "Now 代表“正在使用”的信息：\n- Focus app：当前前台应用\n- Using tab：你正在看的网页 Tab（或后台播放且有声音的 Tab）\n\n想看到 YouTube 视频名等标题，需要在设置里开启隐私 L2，并在扩展/采集器开启发送标题。",
+            targetKey: _tutorialNowKey,
+            beforeShow: () async {
+              await _goToTab(0);
+              await _ensureVisible(_tutorialNowKey);
+            },
+          ),
+          TutorialStep(
+            title: "首页时间轴（0:00–24:00）",
+            body:
+                "时间轴用“泳道”展示今天的应用/网站使用分布：\n- 横轴是时间\n- 纵轴是应用/网站（按总时长或按时间排序）\n- 点某段可直达对应 Block 详情/快速复盘\n\n小技巧：Ctrl + 鼠标滚轮可缩放，拖动可平移。",
+            targetKey: _tutorialTimelineKey,
+            beforeShow: () async {
+              await _goToTab(0);
+              await _ensureVisible(_tutorialTimelineKey);
+            },
+          ),
+          TutorialStep(
+            title: "Review：复盘你的 Block",
+            body:
+                "Review 页面会列出需要复盘的 Block。\n进入某个 Block 后可以快速写：Doing / Output / Next 或打标签。\n\n如果这段不值得复盘，可以点 Skip：标记为已处理，之后不会再提醒（也可撤销）。",
+            targetKey: _tutorialReviewHeaderKey,
+            beforeShow: () async {
+              await _goToTab(1);
+              await _ensureVisible(_tutorialReviewHeaderKey);
+            },
+          ),
+          TutorialStep(
+            title: "隐私级别：标题粒度的开关",
+            body:
+                "隐私级别决定“记录的细粒度”：\n- L1：不存标题（只看域名/应用名）\n- L2：存窗口/Tab 标题（可区分 YouTube 不同视频、VS Code workspace 等）\n- L3：额外存 exePath（更敏感）\n\n建议先用 L2，体验更完整。",
+            targetKey: _tutorialPrivacyKey,
+            beforeShow: () async {
+              await _goToTab(3);
+              await _ensureVisible(_tutorialPrivacyKey);
+            },
+          ),
+          const TutorialStep(
+            title: "完成",
+            body:
+                "你随时可以在设置里重新打开新手引导。\n\n接下来建议：先开 1 天，让数据“跑起来”，再回到 Review 做一次快速复盘。",
+          ),
+        ],
+      );
+      await runner.start();
+      await runner.done;
+    } finally {
+      if (mounted) setState(() => _tutorialRunning = false);
+    }
+  }
+
   String _trackingChipLabel(TrackingStatus? s) {
     if (s == null) return "…";
     if (!s.paused) return "ON";
@@ -516,6 +621,8 @@ class _AppShellState extends State<AppShell> {
         serverUrl: _serverUrl,
         onOpenReview: () => _setIndex(1),
         onOpenSettings: () => _setIndex(3),
+        tutorialNowKey: _tutorialNowKey,
+        tutorialTimelineKey: _tutorialTimelineKey,
         onOpenReviewQuery: (q, day) async {
           _setIndex(1);
           final review = _searchKey.currentState;
@@ -530,6 +637,7 @@ class _AppShellState extends State<AppShell> {
         client: _client,
         serverUrl: _serverUrl,
         isActive: _index == 1,
+        tutorialHeaderKey: _tutorialReviewHeaderKey,
       ),
       ReportsScreen(
         key: _reportsKey,
@@ -543,6 +651,8 @@ class _AppShellState extends State<AppShell> {
         serverUrl: _serverUrl,
         onServerUrlChanged: _setServerUrl,
         isActive: _index == 3,
+        onOpenTutorial: _openTutorial,
+        tutorialPrivacyKey: _tutorialPrivacyKey,
       ),
     ];
 
@@ -552,6 +662,7 @@ class _AppShellState extends State<AppShell> {
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: ActionChip(
+          key: _tutorialTrackingKey,
           label: Text(trackingLabel),
           avatar: Icon(
             _tracking?.paused == true ? Icons.pause : Icons.play_arrow,
@@ -559,6 +670,11 @@ class _AppShellState extends State<AppShell> {
           ),
           onPressed: _openTrackingMenu,
         ),
+      ),
+      IconButton(
+        onPressed: _tutorialRunning ? null : _openTutorial,
+        tooltip: "教程",
+        icon: const Icon(Icons.help_outline),
       ),
       if (_index == 0)
         IconButton(

@@ -23,6 +23,8 @@ class TodayScreen extends StatefulWidget {
     required this.onOpenReview,
     this.onOpenSettings,
     this.onOpenReviewQuery,
+    this.tutorialNowKey,
+    this.tutorialTimelineKey,
   });
 
   final CoreClient client;
@@ -30,6 +32,8 @@ class TodayScreen extends StatefulWidget {
   final VoidCallback onOpenReview;
   final VoidCallback? onOpenSettings;
   final Future<void> Function(String query, DateTime day)? onOpenReviewQuery;
+  final GlobalKey? tutorialNowKey;
+  final GlobalKey? tutorialTimelineKey;
 
   @override
   State<TodayScreen> createState() => TodayScreenState();
@@ -424,7 +428,8 @@ class TodayScreenState extends State<TodayScreen> {
     final idx = _blocks.indexWhere((x) => x.id == b.id);
     final hasNext = idx >= 0 && idx < (_blocks.length - 1);
     if (hasNext) return "You moved on to the next block";
-    if (b.totalSeconds >= _blockLengthSecondsSafe()) return "Current block reached block length";
+    if (b.totalSeconds >= _blockLengthSecondsSafe())
+      return "Current block reached block length";
     return "Last block ended";
   }
 
@@ -1024,10 +1029,11 @@ class TodayScreenState extends State<TodayScreen> {
         date: date,
         tzOffsetMinutes: tzOffsetMinutes,
       );
-      final segmentsFuture =
-          widget.client.timelineDay(date: date, tzOffsetMinutes: tzOffsetMinutes);
+      final segmentsFuture = widget.client
+          .timelineDay(date: date, tzOffsetMinutes: tzOffsetMinutes);
       final dueFuture = viewingToday
-          ? widget.client.blocksDue(date: date, tzOffsetMinutes: tzOffsetMinutes)
+          ? widget.client
+              .blocksDue(date: date, tzOffsetMinutes: tzOffsetMinutes)
           : Future<BlockSummary?>.value(null);
 
       final blocks = await blocksFuture;
@@ -1497,6 +1503,7 @@ class TodayScreenState extends State<TodayScreen> {
   Widget _nowUnavailableCard(BuildContext context) {
     final dayLabel = _dateLocal(_day);
     return Card(
+      key: widget.tutorialNowKey,
       child: Padding(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         child: Column(
@@ -1637,6 +1644,7 @@ class TodayScreenState extends State<TodayScreen> {
       final ageHint =
           age == null ? "" : "Last event: ${_shortAgeFromSeconds(age)} ago.";
       return Card(
+        key: widget.tutorialNowKey,
         child: Padding(
           padding: const EdgeInsets.all(RecorderTokens.space4),
           child: Column(
@@ -1741,6 +1749,7 @@ class TodayScreenState extends State<TodayScreen> {
         displayEntity(app.entity) == displayEntity(bgAudio.entity);
 
     return Card(
+      key: widget.tutorialNowKey,
       child: Padding(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         child: Column(
@@ -2401,6 +2410,7 @@ class TodayScreenState extends State<TodayScreen> {
     final canScrollH = _timelineZoom > 1.01;
 
     return Card(
+      key: widget.tutorialTimelineKey,
       child: Padding(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         child: Column(
