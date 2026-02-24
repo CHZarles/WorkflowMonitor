@@ -114,7 +114,9 @@ class _AppShellState extends State<AppShell> {
     }
 
     if (s.startsWith("recorderphone://")) {
-      unawaited(_showAndFocusWindow());
+      if (_deepLinkWantsForeground(s)) {
+        unawaited(_showAndFocusWindow());
+      }
       _handleDeepLink(s);
       return;
     }
@@ -144,9 +146,7 @@ class _AppShellState extends State<AppShell> {
           setState(() => _index = 1);
           _searchKey.currentState?.refresh(silent: false);
         },
-        startHidden: widget.startMinimized &&
-            (widget.initialDeepLink == null ||
-                widget.initialDeepLink!.trim().isEmpty),
+        startHidden: widget.startMinimized,
       ),
     );
 
@@ -257,6 +257,7 @@ class _AppShellState extends State<AppShell> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 8),
+          persist: false,
           showCloseIcon: true,
           content: Text("Update available: $tag"),
           action: SnackBarAction(
@@ -294,7 +295,6 @@ class _AppShellState extends State<AppShell> {
     final action = uri.queryParameters["action"]?.trim().toLowerCase();
 
     if (action == "skip") {
-      setState(() => _index = 1);
       final id = (blockId ?? "").trim();
       if (id.isEmpty) return;
       _skipBlock(id);
@@ -302,7 +302,6 @@ class _AppShellState extends State<AppShell> {
     }
 
     if (action == "pause") {
-      setState(() => _index = 0);
       final minutes =
           int.tryParse((uri.queryParameters["minutes"] ?? "").trim());
       _pauseTrackingFromDeepLink(minutes: minutes);
@@ -310,7 +309,6 @@ class _AppShellState extends State<AppShell> {
     }
 
     if (action == "resume") {
-      setState(() => _index = 0);
       _resumeTrackingFromDeepLink();
       return;
     }
@@ -324,6 +322,15 @@ class _AppShellState extends State<AppShell> {
     } else {
       review.refresh().catchError((_) {});
     }
+  }
+
+  bool _deepLinkWantsForeground(String raw) {
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.scheme != "recorderphone") return true;
+    final action = (uri.queryParameters["action"] ?? "").trim().toLowerCase();
+    if (action == "skip" || action == "pause" || action == "resume")
+      return false;
+    return true;
   }
 
   Future<void> _skipBlock(String blockId) async {

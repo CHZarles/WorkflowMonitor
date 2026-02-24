@@ -16,8 +16,9 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final args = executableArgs();
   final deepLink = _extractDeepLink(args);
-  final startMinimized = deepLink == null &&
-      _hasFlag(args, const ["--minimized", "--tray", "--background"]);
+  final startMinimized =
+      _hasFlag(args, const ["--minimized", "--tray", "--background"]) ||
+          _isBackgroundDeepLink(deepLink);
 
   final disableSemantics = await _resolveDisableSemantics(args);
 
@@ -80,6 +81,15 @@ String? _extractDeepLink(List<String> args) {
     if (s.startsWith("recorderphone://")) return s;
   }
   return null;
+}
+
+bool _isBackgroundDeepLink(String? raw) {
+  final s = (raw ?? "").trim();
+  if (s.isEmpty) return false;
+  final uri = Uri.tryParse(s);
+  if (uri == null || uri.scheme != "recorderphone") return false;
+  final action = (uri.queryParameters["action"] ?? "").trim().toLowerCase();
+  return action == "skip" || action == "pause" || action == "resume";
 }
 
 bool _hasFlag(List<String> args, List<String> flags) {

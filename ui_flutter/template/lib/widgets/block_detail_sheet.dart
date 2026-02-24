@@ -22,7 +22,8 @@ class _BlockStatItem {
 }
 
 class BlockDetailSheet extends StatefulWidget {
-  const BlockDetailSheet({super.key, required this.client, required this.block});
+  const BlockDetailSheet(
+      {super.key, required this.client, required this.block});
 
   final CoreClient client;
   final BlockSummary block;
@@ -43,12 +44,14 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
   final Set<String> _blockedKeys = {};
   final Set<String> _tags = {};
 
-  bool _statsLoading = true;
-  List<_BlockStatItem> _focusStats = const [];
-  List<_BlockStatItem> _audioStats = const [];
-  int? _audioTotalSeconds;
-
-  static const _presetTags = ["Work", "Meeting", "Learning", "Admin", "Life", "Entertainment"];
+  static const _presetTags = [
+    "Work",
+    "Meeting",
+    "Learning",
+    "Admin",
+    "Life",
+    "Entertainment"
+  ];
 
   @override
   void initState() {
@@ -58,7 +61,6 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
     _next = TextEditingController(text: widget.block.review?.next ?? "");
     _tags.addAll(widget.block.review?.tags ?? const []);
     _loadRules();
-    _loadStats();
   }
 
   @override
@@ -112,7 +114,9 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
   }
 
   String _kindForTopItem(TopItem it) {
-    return (it.kind == "domain" || it.kind == "app") ? it.kind : _guessKind(it.entity);
+    return (it.kind == "domain" || it.kind == "app")
+        ? it.kind
+        : _guessKind(it.entity);
   }
 
   _BlockStatItem _statFromTopItem(TopItem it) {
@@ -123,12 +127,22 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
       final title = rawTitle.isEmpty ? "" : normalizeWebTitle(domain, rawTitle);
       final label = title.isEmpty ? displayEntity(domain) : title;
       final subtitle = title.isEmpty ? null : displayEntity(domain);
-      return _BlockStatItem(kind: kind, entity: domain, label: label, subtitle: subtitle, seconds: it.seconds);
+      return _BlockStatItem(
+          kind: kind,
+          entity: domain,
+          label: label,
+          subtitle: subtitle,
+          seconds: it.seconds);
     }
 
     final appEntity = it.entity.trim();
     final label = displayEntity(appEntity);
-    return _BlockStatItem(kind: kind, entity: appEntity, label: label, subtitle: null, seconds: it.seconds);
+    return _BlockStatItem(
+        kind: kind,
+        entity: appEntity,
+        label: label,
+        subtitle: null,
+        seconds: it.seconds);
   }
 
   Future<void> _loadRules() async {
@@ -151,147 +165,6 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
     } finally {
       if (mounted) setState(() => _rulesLoading = false);
     }
-  }
-
-  bool _isBrowserLabel(String label) {
-    final v = label.toLowerCase();
-    return v == "chrome" || v == "msedge" || v == "edge" || v == "brave" || v == "vivaldi" || v == "opera";
-  }
-
-  Future<void> _loadStats() async {
-    setState(() => _statsLoading = true);
-    try {
-      final startUtc = DateTime.parse(widget.block.startTs).toUtc();
-      final endUtc = DateTime.parse(widget.block.endTs).toUtc();
-      if (!endUtc.isAfter(startUtc)) return;
-
-      final startLocal = startUtc.toLocal();
-      final dateLocal =
-          "${startLocal.year.toString().padLeft(4, "0")}-${startLocal.month.toString().padLeft(2, "0")}-${startLocal.day.toString().padLeft(2, "0")}";
-      final tzOffsetMinutes = startLocal.timeZoneOffset.inMinutes;
-
-      final settings = await widget.client.settings();
-      final storeTitles = settings.storeTitles;
-
-      final segs = await widget.client.timelineDay(date: dateLocal, tzOffsetMinutes: tzOffsetMinutes);
-      final focus = _aggregateSegments(segs, startUtc, endUtc, storeTitles, audio: false);
-      final audio = _aggregateSegments(segs, startUtc, endUtc, storeTitles, audio: true);
-      final audioTotal = audio.fold<int>(0, (sum, it) => sum + it.seconds);
-
-      if (!mounted) return;
-      setState(() {
-        _focusStats = focus;
-        _audioStats = audio;
-        _audioTotalSeconds = audioTotal > 0 ? audioTotal : null;
-      });
-    } catch (_) {
-      // best effort
-    } finally {
-      if (mounted) setState(() => _statsLoading = false);
-    }
-  }
-
-  List<_BlockStatItem> _aggregateSegments(
-    List<TimelineSegment> segs,
-    DateTime blockStartUtc,
-    DateTime blockEndUtc,
-    bool storeTitles, {
-    required bool audio,
-  }) {
-    final secByKey = <String, int>{};
-    final kindByKey = <String, String>{};
-    final entityByKey = <String, String>{};
-    final labelByKey = <String, String>{};
-    final subtitleByKey = <String, String?>{};
-
-    for (final s in segs) {
-      final kind = s.kind;
-      if (kind != "app" && kind != "domain") continue;
-      final isAudio = s.activity == "audio";
-      if (audio != isAudio) continue;
-
-      final rawEntity = s.entity.trim();
-      if (rawEntity.isEmpty) continue;
-
-      DateTime segStartUtc;
-      DateTime segEndUtc;
-      try {
-        segStartUtc = DateTime.parse(s.startTs).toUtc();
-        segEndUtc = DateTime.parse(s.endTs).toUtc();
-      } catch (_) {
-        continue;
-      }
-
-      final start = segStartUtc.isAfter(blockStartUtc) ? segStartUtc : blockStartUtc;
-      final end = segEndUtc.isBefore(blockEndUtc) ? segEndUtc : blockEndUtc;
-      if (!end.isAfter(start)) continue;
-
-      final seconds = end.difference(start).inSeconds;
-      if (seconds <= 0) continue;
-
-      String key;
-      String entity;
-      String label;
-      String? subtitle;
-
-      if (kind == "domain") {
-        final domain = rawEntity.toLowerCase();
-        final rawTitle = (s.title ?? "").trim();
-        final normTitle = storeTitles ? normalizeWebTitle(domain, rawTitle) : "";
-        if (storeTitles && normTitle.isNotEmpty) {
-          key = "domain|$domain|$normTitle";
-          entity = domain;
-          label = normTitle;
-          subtitle = displayEntity(domain);
-        } else {
-          key = "domain|$domain";
-          entity = domain;
-          label = displayEntity(domain);
-          subtitle = null;
-        }
-      } else {
-        final appEntity = rawEntity;
-        final appLabel = displayEntity(appEntity);
-        key = "app|$appEntity";
-        entity = appEntity;
-        label = appLabel;
-        subtitle = null;
-
-        if (storeTitles) {
-          final t = (s.title ?? "").trim();
-          if (t.isNotEmpty && !_isBrowserLabel(appLabel)) {
-            if (t.contains("Visual Studio Code") || appLabel.toLowerCase() == "code" || appLabel.toLowerCase() == "vscode") {
-              final ws = extractVscodeWorkspace(t);
-              subtitle = (ws != null && ws.trim().isNotEmpty) ? "Workspace: ${ws.trim()}" : t;
-            } else {
-              subtitle = t;
-            }
-          }
-        }
-      }
-
-      secByKey[key] = (secByKey[key] ?? 0) + seconds;
-      kindByKey[key] = kind;
-      entityByKey[key] = entity;
-      labelByKey[key] = label;
-      subtitleByKey[key] = subtitle;
-    }
-
-    final out = <_BlockStatItem>[];
-    for (final key in secByKey.keys) {
-      out.add(
-        _BlockStatItem(
-          kind: kindByKey[key] ?? "",
-          entity: entityByKey[key] ?? "",
-          label: labelByKey[key] ?? "",
-          subtitle: subtitleByKey[key],
-          seconds: secByKey[key] ?? 0,
-        ),
-      );
-    }
-    out.sort((a, b) => b.seconds.compareTo(a.seconds));
-    if (out.length > 5) return out.take(5).toList();
-    return out;
   }
 
   Future<void> _blacklistEntity({
@@ -324,6 +197,7 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
       messenger.showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 6),
+          persist: false,
           showCloseIcon: true,
           content: Text("Blacklisted: $displayName"),
           action: SnackBarAction(
@@ -363,7 +237,8 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
           autofocus: true,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text("Add"),
@@ -421,7 +296,8 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Action failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Action failed: $e")));
     } finally {
       if (mounted) setState(() => _skipSaving = false);
     }
@@ -436,8 +312,12 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
           "This will delete events and review for:\n${widget.block.startTs} – ${widget.block.endTs}\n\nThis cannot be undone.",
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Delete")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Delete")),
         ],
       ),
     );
@@ -445,15 +325,19 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
 
     setState(() => _deleting = true);
     try {
-      final res = await widget.client.deleteBlock(startTs: widget.block.startTs, endTs: widget.block.endTs);
+      final res = await widget.client.deleteBlock(
+          startTs: widget.block.startTs, endTs: widget.block.endTs);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Deleted ${res.eventsDeleted} events, ${res.reviewsDeleted} reviews")),
+        SnackBar(
+            content: Text(
+                "Deleted ${res.eventsDeleted} events, ${res.reviewsDeleted} reviews")),
       );
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Delete failed: $e")));
     } finally {
       if (mounted) setState(() => _deleting = false);
     }
@@ -461,14 +345,16 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final focusItems = _focusStats.isNotEmpty ? _focusStats : widget.block.topItems.map(_statFromTopItem).toList();
+    final focusItems = widget.block.topItems.map(_statFromTopItem).toList();
     final audioItems =
-        _audioStats.isNotEmpty ? _audioStats : widget.block.backgroundTopItems.map(_statFromTopItem).toList();
+        widget.block.backgroundTopItems.map(_statFromTopItem).toList();
 
     final top = focusItems.take(3).map((e) => e.label).join(" · ");
     final bottom = MediaQuery.of(context).viewInsets.bottom;
-    final maxSeconds = focusItems.fold<int>(0, (m, it) => it.seconds > m ? it.seconds : m);
-    final bgMaxSeconds = audioItems.fold<int>(0, (m, it) => it.seconds > m ? it.seconds : m);
+    final maxSeconds =
+        focusItems.fold<int>(0, (m, it) => it.seconds > m ? it.seconds : m);
+    final bgMaxSeconds =
+        audioItems.fold<int>(0, (m, it) => it.seconds > m ? it.seconds : m);
     final allTags = {..._presetTags, ..._tags}.toList();
     allTags.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final skipped = widget.block.review?.skipped == true;
@@ -495,33 +381,34 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
           child: ListView(
             shrinkWrap: true,
             children: [
-              Text("Block details", style: Theme.of(context).textTheme.titleMedium),
+              Text("Block details",
+                  style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: RecorderTokens.space2),
               Text("Top: $top", style: Theme.of(context).textTheme.labelMedium),
               const SizedBox(height: RecorderTokens.space4),
               Text("Top items", style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: RecorderTokens.space2),
-              if (_statsLoading)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: RecorderTokens.space2),
-                  child: LinearProgressIndicator(minHeight: 2),
-                ),
               if (focusItems.isEmpty)
                 const Text("No items.")
               else
                 ...focusItems.map((it) {
-                  final ratio = maxSeconds <= 0 ? 0.0 : (it.seconds / maxSeconds).clamp(0.0, 1.0);
-                  final blocked = _isBlockedEntity(kind: it.kind, entity: it.entity);
+                  final ratio = maxSeconds <= 0
+                      ? 0.0
+                      : (it.seconds / maxSeconds).clamp(0.0, 1.0);
+                  final blocked =
+                      _isBlockedEntity(kind: it.kind, entity: it.entity);
                   final isDomain = it.kind == "domain";
                   final subtitle = it.subtitle;
                   return Padding(
-                    padding: const EdgeInsets.only(bottom: RecorderTokens.space3),
+                    padding:
+                        const EdgeInsets.only(bottom: RecorderTokens.space3),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            Icon(isDomain ? Icons.public : Icons.apps, size: 18),
+                            Icon(isDomain ? Icons.public : Icons.apps,
+                                size: 18),
                             const SizedBox(width: RecorderTokens.space2),
                             Expanded(
                               child: Column(
@@ -531,7 +418,8 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
                                     it.label,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(context).textTheme.bodyLarge,
+                                    style:
+                                        Theme.of(context).textTheme.bodyLarge,
                                   ),
                                   if (subtitle != null) ...[
                                     const SizedBox(height: 2),
@@ -539,14 +427,17 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
                                       subtitle,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context).textTheme.labelMedium,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium,
                                     ),
                                   ],
                                 ],
                               ),
                             ),
                             const SizedBox(width: RecorderTokens.space2),
-                            Text(formatDuration(it.seconds), style: Theme.of(context).textTheme.labelMedium),
+                            Text(formatDuration(it.seconds),
+                                style: Theme.of(context).textTheme.labelMedium),
                             const SizedBox(width: RecorderTokens.space1),
                             IconButton(
                               onPressed: blocked || _rulesLoading
@@ -554,10 +445,13 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
                                   : () => _blacklistEntity(
                                         kind: it.kind,
                                         entity: it.entity,
-                                        displayName: isDomain ? it.entity : it.label,
+                                        displayName:
+                                            isDomain ? it.entity : it.label,
                                       ),
-                              tooltip: blocked ? "Blacklisted" : "Add to blacklist",
-                              icon: Icon(blocked ? Icons.block : Icons.block_outlined),
+                              tooltip:
+                                  blocked ? "Blacklisted" : "Add to blacklist",
+                              icon: Icon(
+                                  blocked ? Icons.block : Icons.block_outlined),
                             ),
                           ],
                         ),
@@ -566,163 +460,206 @@ class _BlockDetailSheetState extends State<BlockDetailSheet> {
                           child: LinearProgressIndicator(
                             value: ratio,
                             minHeight: 10,
-                            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
                           ),
                         ),
                       ],
                     ),
                   );
                 }),
-          if (audioItems.isNotEmpty) ...[
-            const SizedBox(height: RecorderTokens.space4),
-            Row(
-              children: [
-                const Icon(Icons.headphones, size: 18),
-                const SizedBox(width: RecorderTokens.space2),
-                Expanded(
-                  child: Text("Background audio", style: Theme.of(context).textTheme.titleMedium),
-                ),
-                if ((_audioTotalSeconds ?? widget.block.backgroundSeconds) != null)
-                  Text(
-                    formatDuration((_audioTotalSeconds ?? widget.block.backgroundSeconds)!),
-                    style: Theme.of(context).textTheme.labelMedium,
-                  ),
-              ],
-            ),
-            const SizedBox(height: RecorderTokens.space2),
-            ...audioItems.map((it) {
-              final ratio = bgMaxSeconds <= 0 ? 0.0 : (it.seconds / bgMaxSeconds).clamp(0.0, 1.0);
-              final blocked = _isBlockedEntity(kind: it.kind, entity: it.entity);
-              final subtitle = it.subtitle;
-              final icon = it.kind == "app" ? Icons.apps : Icons.public;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: RecorderTokens.space3),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              if (audioItems.isNotEmpty) ...[
+                const SizedBox(height: RecorderTokens.space4),
+                Row(
                   children: [
-                    Row(
+                    const Icon(Icons.headphones, size: 18),
+                    const SizedBox(width: RecorderTokens.space2),
+                    Expanded(
+                      child: Text("Background audio",
+                          style: Theme.of(context).textTheme.titleMedium),
+                    ),
+                    if (widget.block.backgroundSeconds != null)
+                      Text(
+                        formatDuration(widget.block.backgroundSeconds!),
+                        style: Theme.of(context).textTheme.labelMedium,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: RecorderTokens.space2),
+                ...audioItems.map((it) {
+                  final ratio = bgMaxSeconds <= 0
+                      ? 0.0
+                      : (it.seconds / bgMaxSeconds).clamp(0.0, 1.0);
+                  final blocked =
+                      _isBlockedEntity(kind: it.kind, entity: it.entity);
+                  final subtitle = it.subtitle;
+                  final icon = it.kind == "app" ? Icons.apps : Icons.public;
+                  return Padding(
+                    padding:
+                        const EdgeInsets.only(bottom: RecorderTokens.space3),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(icon, size: 18),
-                        const SizedBox(width: RecorderTokens.space2),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                it.label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodyLarge,
-                              ),
-                              if (subtitle != null) ...[
-                                const SizedBox(height: 2),
-                                Text(
-                                  subtitle,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.labelMedium,
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: RecorderTokens.space2),
-                        Text(formatDuration(it.seconds), style: Theme.of(context).textTheme.labelMedium),
-                        const SizedBox(width: RecorderTokens.space1),
-                        IconButton(
-                          onPressed: blocked || _rulesLoading
-                              ? null
-                              : () => _blacklistEntity(
-                                    kind: it.kind,
-                                    entity: it.entity,
-                                    displayName: it.entity,
+                        Row(
+                          children: [
+                            Icon(icon, size: 18),
+                            const SizedBox(width: RecorderTokens.space2),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    it.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style:
+                                        Theme.of(context).textTheme.bodyLarge,
                                   ),
-                          tooltip: blocked ? "Blacklisted" : "Add to blacklist",
-                          icon: Icon(blocked ? Icons.block : Icons.block_outlined),
+                                  if (subtitle != null) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      subtitle,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: RecorderTokens.space2),
+                            Text(formatDuration(it.seconds),
+                                style: Theme.of(context).textTheme.labelMedium),
+                            const SizedBox(width: RecorderTokens.space1),
+                            IconButton(
+                              onPressed: blocked || _rulesLoading
+                                  ? null
+                                  : () => _blacklistEntity(
+                                        kind: it.kind,
+                                        entity: it.entity,
+                                        displayName: it.entity,
+                                      ),
+                              tooltip:
+                                  blocked ? "Blacklisted" : "Add to blacklist",
+                              icon: Icon(
+                                  blocked ? Icons.block : Icons.block_outlined),
+                            ),
+                          ],
+                        ),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: LinearProgressIndicator(
+                            value: ratio,
+                            minHeight: 10,
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
+                          ),
                         ),
                       ],
                     ),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: LinearProgressIndicator(
-                        value: ratio,
-                        minHeight: 10,
-                        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                      ),
+                  );
+                }),
+              ],
+              const SizedBox(height: RecorderTokens.space4),
+              Text("Review", style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: RecorderTokens.space3),
+              TextField(
+                  controller: _doing,
+                  decoration:
+                      const InputDecoration(labelText: "Doing (optional)")),
+              const SizedBox(height: RecorderTokens.space3),
+              TextField(
+                  controller: _output,
+                  decoration:
+                      const InputDecoration(labelText: "Output / Result")),
+              const SizedBox(height: RecorderTokens.space3),
+              TextField(
+                  controller: _next,
+                  decoration:
+                      const InputDecoration(labelText: "Next (optional)")),
+              const SizedBox(height: RecorderTokens.space4),
+              Row(
+                children: [
+                  Expanded(
+                      child: Text("Tags",
+                          style: Theme.of(context).textTheme.titleMedium)),
+                  OutlinedButton.icon(
+                      onPressed: _addTag,
+                      icon: const Icon(Icons.add),
+                      label: const Text("Add")),
+                ],
+              ),
+              const SizedBox(height: RecorderTokens.space2),
+              Wrap(
+                spacing: RecorderTokens.space2,
+                runSpacing: RecorderTokens.space2,
+                children: [
+                  for (final t in allTags)
+                    FilterChip(
+                      label: Text(t),
+                      selected: _tags.contains(t),
+                      onSelected: (v) => setState(() {
+                        if (v) {
+                          _tags.add(t);
+                        } else {
+                          _tags.remove(t);
+                        }
+                      }),
                     ),
-                  ],
-                ),
-              );
-            }),
-          ],
-          const SizedBox(height: RecorderTokens.space4),
-          Text("Review", style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: RecorderTokens.space3),
-          TextField(controller: _doing, decoration: const InputDecoration(labelText: "Doing (optional)")),
-          const SizedBox(height: RecorderTokens.space3),
-          TextField(controller: _output, decoration: const InputDecoration(labelText: "Output / Result")),
-          const SizedBox(height: RecorderTokens.space3),
-          TextField(controller: _next, decoration: const InputDecoration(labelText: "Next (optional)")),
-          const SizedBox(height: RecorderTokens.space4),
-          Row(
-            children: [
-              Expanded(child: Text("Tags", style: Theme.of(context).textTheme.titleMedium)),
-              OutlinedButton.icon(onPressed: _addTag, icon: const Icon(Icons.add), label: const Text("Add")),
-            ],
-          ),
-          const SizedBox(height: RecorderTokens.space2),
-          Wrap(
-            spacing: RecorderTokens.space2,
-            runSpacing: RecorderTokens.space2,
-            children: [
-              for (final t in allTags)
-                FilterChip(
-                  label: Text(t),
-                  selected: _tags.contains(t),
-                  onSelected: (v) => setState(() {
-                    if (v) {
-                      _tags.add(t);
-                    } else {
-                      _tags.remove(t);
-                    }
-                  }),
-                ),
-            ],
-          ),
-          const SizedBox(height: RecorderTokens.space4),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton(
-                  onPressed: _saving || _deleting || _skipSaving ? null : _save,
-                  child: _saving
-                      ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text("Save"),
-                ),
+                ],
               ),
-              const SizedBox(width: RecorderTokens.space3),
-              OutlinedButton(
-                onPressed: _saving || _deleting || _skipSaving ? null : () => _toggleSkip(skipped: !skipped),
-                child: _skipSaving
-                    ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                    : Text(skipped ? "Unskip" : "Skip"),
+              const SizedBox(height: RecorderTokens.space4),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton(
+                      onPressed:
+                          _saving || _deleting || _skipSaving ? null : _save,
+                      child: _saving
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Text("Save"),
+                    ),
+                  ),
+                  const SizedBox(width: RecorderTokens.space3),
+                  OutlinedButton(
+                    onPressed: _saving || _deleting || _skipSaving
+                        ? null
+                        : () => _toggleSkip(skipped: !skipped),
+                    child: _skipSaving
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : Text(skipped ? "Unskip" : "Skip"),
+                  ),
+                ],
               ),
-            ],
-          ),
-          const SizedBox(height: RecorderTokens.space4),
-          const Divider(),
-          const SizedBox(height: RecorderTokens.space2),
-          Text("Danger zone", style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: RecorderTokens.space2),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.errorContainer,
-              foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
-            ),
-            onPressed: _deleting || _saving || _skipSaving ? null : _deleteBlock,
-            icon: const Icon(Icons.delete_forever_outlined),
-            label: _deleting ? const Text("Deleting…") : const Text("Delete this block"),
-          ),
+              const SizedBox(height: RecorderTokens.space4),
+              const Divider(),
+              const SizedBox(height: RecorderTokens.space2),
+              Text("Danger zone",
+                  style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: RecorderTokens.space2),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                  foregroundColor:
+                      Theme.of(context).colorScheme.onErrorContainer,
+                ),
+                onPressed:
+                    _deleting || _saving || _skipSaving ? null : _deleteBlock,
+                icon: const Icon(Icons.delete_forever_outlined),
+                label: _deleting
+                    ? const Text("Deleting…")
+                    : const Text("Delete this block"),
+              ),
             ],
           ),
         ),

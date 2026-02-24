@@ -63,14 +63,19 @@ class _StatItem {
 }
 
 class _TopAgg {
-  const _TopAgg(
-      {required this.focusSeconds,
-      required this.audioSeconds,
-      required this.items});
+  const _TopAgg({
+    required this.focusSeconds,
+    required this.audioSeconds,
+    required this.items,
+    required this.focusSwitches,
+    required this.longestFocusStreakSeconds,
+  });
 
   final int focusSeconds;
   final int audioSeconds;
   final List<_StatItem> items;
+  final int focusSwitches;
+  final int longestFocusStreakSeconds;
 }
 
 class _LaneAcc {
@@ -90,24 +95,6 @@ class _LaneAcc {
   int totalSeconds = 0;
   int firstStartMinute = 1440;
   final List<DayTimelineBar> bars = [];
-}
-
-class _RangeStatItem {
-  const _RangeStatItem({
-    required this.kind,
-    required this.entity,
-    required this.label,
-    required this.subtitle,
-    required this.seconds,
-    required this.audio,
-  });
-
-  final String kind; // "app" | "domain"
-  final String entity; // app id or hostname
-  final String label;
-  final String? subtitle;
-  final int seconds;
-  final bool audio;
 }
 
 class _FlowItem {
@@ -160,6 +147,9 @@ class TodayScreenState extends State<TodayScreen> {
   String? _error;
   DateTime? _coreSettingsUpdatedAt;
   List<TimelineSegment> _segments = const [];
+  int _segmentsVersion = 0;
+  bool _hasWebSeg = false;
+  bool _hasWebTitleSeg = false;
   List<BlockSummary> _blocks = const [];
   BlockSummary? _dueBlock;
   int _nowFocusTtlSeconds = 3 * 60;
@@ -201,6 +191,18 @@ class TodayScreenState extends State<TodayScreen> {
   final Set<String> _blockedKeys = {};
 
   bool _agentBusy = false;
+
+  String _topAggCacheKey = "";
+  _TopAgg? _topAggCache;
+
+  String _timelineCacheKey = "";
+  ({List<DayTimelineLane> lanes, int totalCount})? _timelineCache;
+
+  String _flowCacheKey = "";
+  List<_FlowItem>? _flowCache;
+
+  String _dayTimelineWidgetKey = "";
+  Widget? _dayTimelineWidgetCache;
 
   @override
   void initState() {
@@ -642,6 +644,7 @@ class TodayScreenState extends State<TodayScreen> {
       messenger.showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 6),
+          persist: false,
           showCloseIcon: true,
           content: Text("Blacklisted: $displayName"),
           action: SnackBarAction(
@@ -700,6 +703,18 @@ class TodayScreenState extends State<TodayScreen> {
     return t.isEmpty ? null : t;
   }
 
+  _TopAgg _topAggCached() {
+    final dayKey = "${_day.year}-${_day.month}-${_day.day}";
+    final key = "$dayKey|$_segmentsVersion|${_coreStoreTitles ? 1 : 0}";
+    final cached = _topAggCache;
+    if (cached != null && key == _topAggCacheKey) return cached;
+
+    final next = _buildTopAgg();
+    _topAggCacheKey = key;
+    _topAggCache = next;
+    return next;
+  }
+
   _TopAgg _buildTopAgg() {
     final accSeconds = <String, int>{};
     final accHasAudio = <String, bool>{};
@@ -710,6 +725,9 @@ class TodayScreenState extends State<TodayScreen> {
 
     var focusSeconds = 0;
     var audioSeconds = 0;
+    var focusSwitches = 0;
+    var longestFocusStreakSeconds = 0;
+    String? lastFocusKey;
 
     for (final s in _segments) {
       final kind = s.kind;
@@ -730,28 +748,39 @@ class TodayScreenState extends State<TodayScreen> {
       String? subtitle;
 
       if (kind == "domain") {
+        final domain = entity.toLowerCase();
         final rawTitle = (s.title ?? "").trim();
         final normTitle =
-            _coreStoreTitles ? normalizeWebTitle(entity, rawTitle) : "";
+            _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
         if (_coreStoreTitles && normTitle.isNotEmpty) {
-          key = "domain|$entity|$normTitle";
+          key = "domain|$domain|$normTitle";
           label = normTitle;
-          subtitle = displayEntity(entity);
+          subtitle = displayEntity(domain);
         } else {
-          key = "domain|$entity";
-          label = displayEntity(entity);
-          subtitle = _subtitleForDomainEntity(entity);
+          key = "domain|$domain";
+          label = displayEntity(domain);
+          subtitle = null;
         }
       } else {
         key = "app|$entity";
         label = displayEntity(entity);
-        subtitle = _subtitleForAppEntity(entity);
+        subtitle = null;
+      }
+
+      if (!isAudio) {
+        if (s.seconds > longestFocusStreakSeconds) {
+          longestFocusStreakSeconds = s.seconds;
+        }
+        if (lastFocusKey != null && key != lastFocusKey) {
+          focusSwitches += 1;
+        }
+        lastFocusKey = key;
       }
 
       accSeconds[key] = (accSeconds[key] ?? 0) + s.seconds;
       accHasAudio[key] = (accHasAudio[key] ?? false) || isAudio;
       accKind[key] = kind;
-      accEntity[key] = entity;
+      accEntity[key] = kind == "domain" ? entity.toLowerCase() : entity;
       accLabel[key] = label;
       accSubtitle[key] = subtitle;
     }
@@ -771,7 +800,12 @@ class TodayScreenState extends State<TodayScreen> {
     }
     items.sort((a, b) => b.seconds.compareTo(a.seconds));
     return _TopAgg(
-        focusSeconds: focusSeconds, audioSeconds: audioSeconds, items: items);
+      focusSeconds: focusSeconds,
+      audioSeconds: audioSeconds,
+      items: items,
+      focusSwitches: focusSwitches,
+      longestFocusStreakSeconds: longestFocusStreakSeconds,
+    );
   }
 
   IconData _iconForAppLabel(String label) {
@@ -839,6 +873,29 @@ class TodayScreenState extends State<TodayScreen> {
     return Icons.category_outlined;
   }
 
+  String? _subtitleForStatItem(_StatItem it) {
+    if (!_coreStoreTitles) return null;
+    if (!_viewingToday()) return it.subtitle;
+
+    if (it.kind == "app") {
+      final v = _subtitleForAppEntity(it.entity);
+      return (v == null || v.trim().isEmpty) ? it.subtitle : v;
+    }
+
+    if (it.kind == "domain") {
+      final domain = it.entity.toLowerCase();
+      final domainLabel = displayEntity(domain);
+      final label = it.label.trim();
+      final looksLikeTitle =
+          label.isNotEmpty && label.toLowerCase() != domainLabel.toLowerCase();
+      if (looksLikeTitle) return domainLabel;
+      final v = _subtitleForDomainEntity(domain);
+      return (v == null || v.trim().isEmpty) ? it.subtitle : v;
+    }
+
+    return it.subtitle;
+  }
+
   List<_StatItem> _applyTopFilter(List<_StatItem> items) {
     switch (_topFilter) {
       case _TopFilter.all:
@@ -884,6 +941,7 @@ class TodayScreenState extends State<TodayScreen> {
       messenger.showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 5),
+          persist: false,
           showCloseIcon: true,
           content: Text(skipped ? "Skipped this block" : "Restored this block"),
           action: SnackBarAction(
@@ -1166,12 +1224,27 @@ class TodayScreenState extends State<TodayScreen> {
       final segments = await segmentsFuture;
       final due = await dueFuture;
       if (!mounted) return;
+      final hasWebSeg = segments.any((s) => s.kind == "domain");
+      final hasWebTitleSeg = segments.any(
+        (s) => s.kind == "domain" && (s.title ?? "").trim().isNotEmpty,
+      );
       setState(() {
         _segments = segments;
+        _segmentsVersion += 1;
+        _hasWebSeg = hasWebSeg;
+        _hasWebTitleSeg = hasWebTitleSeg;
         _blocks = blocks;
         _dueBlock = due;
         _blocksUpdatedAt = DateTime.now();
         _error = null;
+        _topAggCacheKey = "";
+        _topAggCache = null;
+        _timelineCacheKey = "";
+        _timelineCache = null;
+        _flowCacheKey = "";
+        _flowCache = null;
+        _dayTimelineWidgetKey = "";
+        _dayTimelineWidgetCache = null;
       });
       _autoRetryAttempts = 0;
       if (triggerReminder && viewingToday && due != null) {
@@ -1280,45 +1353,6 @@ class TodayScreenState extends State<TodayScreen> {
     return c;
   }
 
-  int _countFocusSwitches() {
-    String? lastKey;
-    var switches = 0;
-    for (final s in _segments) {
-      if (s.activity == "audio") continue;
-      final kind = s.kind;
-      final entity = s.entity.trim();
-      if (entity.isEmpty) continue;
-      if (kind != "app" && kind != "domain") continue;
-
-      String key;
-      if (kind == "domain") {
-        final rawTitle = (s.title ?? "").trim();
-        final normTitle =
-            _coreStoreTitles ? normalizeWebTitle(entity, rawTitle) : "";
-        key = (_coreStoreTitles && normTitle.isNotEmpty)
-            ? "domain|$entity|$normTitle"
-            : "domain|$entity";
-      } else {
-        key = "app|$entity";
-      }
-
-      if (lastKey != null && key != lastKey) {
-        switches += 1;
-      }
-      lastKey = key;
-    }
-    return switches;
-  }
-
-  int _longestFocusStreakSeconds() {
-    var max = 0;
-    for (final s in _segments) {
-      if (s.activity == "audio") continue;
-      if (s.seconds > max) max = s.seconds;
-    }
-    return max;
-  }
-
   String _privacyLevelLabel() {
     if (!_coreStoreTitles && !_coreStoreExePath) return "L1";
     if (_coreStoreTitles && !_coreStoreExePath) return "L2";
@@ -1331,8 +1365,8 @@ class TodayScreenState extends State<TodayScreen> {
     final focusSeconds = topAgg.focusSeconds;
     final audioSeconds = topAgg.audioSeconds;
     final trackedSeconds = focusSeconds + audioSeconds;
-    final focusSwitches = _countFocusSwitches();
-    final longestStreak = _longestFocusStreakSeconds();
+    final focusSwitches = topAgg.focusSwitches;
+    final longestStreak = topAgg.longestFocusStreakSeconds;
 
     final totalBlocks = _blocks.length;
     final reviewedBlocks = _countReviewedBlocks();
@@ -1345,7 +1379,7 @@ class TodayScreenState extends State<TodayScreen> {
         ? null
         : "${formatHHMM(due.startTs)}–${formatHHMM(due.endTs)}";
     final dueTop = due == null ? null : _blockTopLine(due);
-    final dueAudioTop = due == null ? null : _blockAudioTop(due);
+    final dueAudioTop = due == null ? null : _blockAudioTopItem(due);
 
     final scheme = Theme.of(context).colorScheme;
     final showAndroidLocalhostHint =
@@ -1581,7 +1615,7 @@ class TodayScreenState extends State<TodayScreen> {
                   const SizedBox(width: RecorderTokens.space1),
                   Expanded(
                     child: Text(
-                      "${dueAudioTop.label} ${formatDuration(dueAudioTop.seconds)}",
+                      "${displayTopItemName(dueAudioTop)} ${formatDuration(dueAudioTop.seconds)}",
                       style: Theme.of(context).textTheme.labelMedium,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1598,11 +1632,11 @@ class TodayScreenState extends State<TodayScreen> {
 
   Widget _reviewDueCard(BuildContext context, BlockSummary due) {
     final top = _blockTopLine(due);
-    final audioTop = _blockAudioTop(due);
+    final audioTop = _blockAudioTopItem(due);
     final title = "${formatHHMM(due.startTs)}–${formatHHMM(due.endTs)}";
     final audioSuffix = audioTop == null
         ? ""
-        : " · 🎧 ${audioTop.label} ${formatDuration(audioTop.seconds)}";
+        : " · 🎧 ${displayTopItemName(audioTop)} ${formatDuration(audioTop.seconds)}";
     final reason = _dueReasonShort(due);
     return Card(
       child: Padding(
@@ -2049,10 +2083,96 @@ class TodayScreenState extends State<TodayScreen> {
         curve: Curves.easeOutCubic);
   }
 
-  List<DayTimelineLane> _buildTimelineLanesAll() {
-    final dayStart = DateTime(_day.year, _day.month, _day.day);
+  ({
+    String laneKey,
+    String kind,
+    String entity,
+    String label,
+    String? subtitle,
+    IconData icon,
+  })? _timelineLaneMeta(TimelineSegment s) {
+    final kind = s.kind;
+    if (kind != "app" && kind != "domain") return null;
+    final rawEntity = s.entity.trim();
+    if (rawEntity.isEmpty) return null;
 
-    final lanes = <String, _LaneAcc>{};
+    if (kind == "domain") {
+      final domain = rawEntity.toLowerCase();
+      final rawTitle = (s.title ?? "").trim();
+      final normTitle =
+          _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
+      if (_coreStoreTitles && normTitle.isNotEmpty) {
+        return (
+          laneKey: "domain|$domain|$normTitle",
+          kind: kind,
+          entity: domain,
+          label: normTitle,
+          subtitle: displayEntity(domain),
+          icon: Icons.public,
+        );
+      }
+      return (
+        laneKey: "domain|$domain",
+        kind: kind,
+        entity: domain,
+        label: displayEntity(domain),
+        subtitle: null,
+        icon: Icons.public,
+      );
+    }
+
+    final appEntity = rawEntity;
+    final label = displayEntity(appEntity);
+    final icon = _iconForAppLabel(label);
+    final title = (s.title ?? "").trim();
+    final labelLc = label.toLowerCase();
+    final isVscode = labelLc == "code" ||
+        labelLc == "vscode" ||
+        title.contains("Visual Studio Code");
+    if (_coreStoreTitles && isVscode && title.isNotEmpty) {
+      final ws = extractVscodeWorkspace(title);
+      if (ws != null && ws.trim().isNotEmpty) {
+        final w = ws.trim();
+        return (
+          laneKey: "app|$appEntity|$w",
+          kind: kind,
+          entity: appEntity,
+          label: label,
+          subtitle: "Workspace: $w",
+          icon: icon,
+        );
+      }
+    }
+
+    return (
+      laneKey: "app|$appEntity",
+      kind: kind,
+      entity: appEntity,
+      label: label,
+      subtitle: null,
+      icon: icon,
+    );
+  }
+
+  ({List<DayTimelineLane> lanes, int totalCount}) _timelineModelCached({
+    required bool showAll,
+  }) {
+    final dayKey = "${_day.year}-${_day.month}-${_day.day}";
+    final key =
+        "$dayKey|$_segmentsVersion|${_topFilter.index}|${_timelineSortByTime ? 1 : 0}|${_coreStoreTitles ? 1 : 0}|${showAll ? 1 : 0}";
+    final cached = _timelineCache;
+    if (cached != null && key == _timelineCacheKey) return cached;
+
+    final next = _buildTimelineModel(showAll: showAll);
+    _timelineCacheKey = key;
+    _timelineCache = next;
+    return next;
+  }
+
+  ({List<DayTimelineLane> lanes, int totalCount}) _buildTimelineModel({
+    required bool showAll,
+  }) {
+    final dayStart = DateTime(_day.year, _day.month, _day.day);
 
     Iterable<TimelineSegment> segs;
     switch (_topFilter) {
@@ -2067,84 +2187,74 @@ class TodayScreenState extends State<TodayScreen> {
         break;
     }
 
-    for (final s in segs) {
-      final kind = s.kind;
-      final entity = s.entity.trim();
-      if (kind != "app" && kind != "domain") continue;
-      if (entity.isEmpty) continue;
+    final lanesByKey = <String, _LaneAcc>{};
 
-      DateTime start;
-      DateTime end;
-      try {
-        start = DateTime.parse(s.startTs).toLocal();
-        end = DateTime.parse(s.endTs).toLocal();
-      } catch (_) {
-        continue;
-      }
+    for (final s in segs) {
+      final meta = _timelineLaneMeta(s);
+      if (meta == null) continue;
+
+      final start = s.startLocal;
+      final end = s.endLocal;
+      if (start == null || end == null) continue;
+      if (!end.isAfter(start)) continue;
+
       final startMin = _minuteOfDay(start, dayStart);
       final endMin = _minuteOfDay(end, dayStart);
       if (endMin <= startMin) continue;
 
-      String laneKey;
-      String label;
-      String? subtitle;
-      IconData icon;
-
-      if (kind == "domain") {
-        final domain = entity.toLowerCase();
-        final rawTitle = (s.title ?? "").trim();
-        final normTitle =
-            _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
-        if (_coreStoreTitles && normTitle.isNotEmpty) {
-          laneKey = "domain|$domain|$normTitle";
-          label = normTitle;
-          subtitle = displayEntity(domain);
-        } else {
-          laneKey = "domain|$domain";
-          label = displayEntity(domain);
-          subtitle = _subtitleForDomainEntity(domain);
-        }
-        icon = Icons.public;
-      } else {
-        label = displayEntity(entity);
-        icon = _iconForAppLabel(label);
-
-        final t = (s.title ?? "").trim();
-        final labelLc = label.toLowerCase();
-        final isVscode = labelLc == "code" ||
-            labelLc == "vscode" ||
-            t.contains("Visual Studio Code");
-        if (_coreStoreTitles && isVscode && t.isNotEmpty) {
-          final ws = extractVscodeWorkspace(t);
-          if (ws != null && ws.trim().isNotEmpty) {
-            final w = ws.trim();
-            laneKey = "app|$entity|$w";
-            subtitle = "Workspace: $w";
-          } else {
-            laneKey = "app|$entity";
-            subtitle = null;
-          }
-        } else {
-          laneKey = "app|$entity";
-          subtitle = null;
-        }
-      }
-
-      final lane = lanes.putIfAbsent(
-        laneKey,
+      final lane = lanesByKey.putIfAbsent(
+        meta.laneKey,
         () => _LaneAcc(
-          kind: kind,
-          entity: kind == "domain" ? entity.toLowerCase() : entity,
-          label: label,
-          subtitle: subtitle,
-          icon: icon,
+          kind: meta.kind,
+          entity: meta.entity,
+          label: meta.label,
+          subtitle: meta.subtitle,
+          icon: meta.icon,
         ),
       );
       lane.totalSeconds += s.seconds;
       if (startMin < lane.firstStartMinute) lane.firstStartMinute = startMin;
+    }
+
+    final totalCount = lanesByKey.length;
+    final entries = lanesByKey.entries.toList();
+    entries.sort((a, b) {
+      final la = a.value;
+      final lb = b.value;
+      if (_timelineSortByTime) {
+        final byTime = la.firstStartMinute.compareTo(lb.firstStartMinute);
+        if (byTime != 0) return byTime;
+      }
+      final byTotal = lb.totalSeconds.compareTo(la.totalSeconds);
+      if (byTotal != 0) return byTotal;
+      return la.label.toLowerCase().compareTo(lb.label.toLowerCase());
+    });
+
+    final visibleEntries = showAll ? entries : entries.take(12).toList();
+    final visibleKeys = visibleEntries.map((e) => e.key).toSet();
+
+    for (final s in segs) {
+      final meta = _timelineLaneMeta(s);
+      if (meta == null) continue;
+      if (!visibleKeys.contains(meta.laneKey)) continue;
+
+      final lane = lanesByKey[meta.laneKey];
+      if (lane == null) continue;
+
+      final start = s.startLocal;
+      final end = s.endLocal;
+      if (start == null || end == null) continue;
+      if (!end.isAfter(start)) continue;
+
+      final startMin = _minuteOfDay(start, dayStart);
+      final endMin = _minuteOfDay(end, dayStart);
+      if (endMin <= startMin) continue;
+
       final audio = s.activity == "audio";
       final time = "${_hhmmFromMinute(startMin)}–${_hhmmFromMinute(endMin)}";
-      final tipHead = subtitle == null ? label : "$label\n$subtitle";
+      final tipHead = lane.subtitle == null
+          ? lane.label
+          : "${lane.label}\n${lane.subtitle}";
       lane.bars.add(
         DayTimelineBar(
           startMinute: startMin,
@@ -2157,191 +2267,86 @@ class TodayScreenState extends State<TodayScreen> {
       );
     }
 
-    final out = lanes.values.toList();
-    out.sort((a, b) {
-      if (_timelineSortByTime) {
-        final byTime = a.firstStartMinute.compareTo(b.firstStartMinute);
-        if (byTime != 0) return byTime;
-      }
-      final byTotal = b.totalSeconds.compareTo(a.totalSeconds);
-      if (byTotal != 0) return byTotal;
-      return a.label.toLowerCase().compareTo(b.label.toLowerCase());
-    });
-    return out
-        .map(
-          (l) => DayTimelineLane(
-            kind: l.kind,
-            entity: l.entity,
-            label: l.label,
-            subtitle: l.subtitle,
-            icon: l.icon,
-            totalSeconds: l.totalSeconds,
-            bars: l.bars,
-          ),
-        )
-        .toList();
-  }
-
-  List<_RangeStatItem> _aggregateSegmentsForRange({
-    required DateTime startUtc,
-    required DateTime endUtc,
-    required bool audio,
-  }) {
-    if (!endUtc.isAfter(startUtc)) return const [];
-
-    final secByKey = <String, int>{};
-    final kindByKey = <String, String>{};
-    final entityByKey = <String, String>{};
-    final labelByKey = <String, String>{};
-    final subtitleByKey = <String, String?>{};
-
-    for (final s in _segments) {
-      final isAudio = s.activity == "audio";
-      if (audio != isAudio) continue;
-
-      final kind = s.kind;
-      if (kind != "app" && kind != "domain") continue;
-
-      final rawEntity = s.entity.trim();
-      if (rawEntity.isEmpty) continue;
-
-      DateTime segStartUtc;
-      DateTime segEndUtc;
-      try {
-        segStartUtc = DateTime.parse(s.startTs).toUtc();
-        segEndUtc = DateTime.parse(s.endTs).toUtc();
-      } catch (_) {
-        continue;
-      }
-      if (!segEndUtc.isAfter(segStartUtc)) continue;
-
-      if (!segEndUtc.isAfter(startUtc) || !endUtc.isAfter(segStartUtc))
-        continue;
-      final overlapStart =
-          segStartUtc.isAfter(startUtc) ? segStartUtc : startUtc;
-      final overlapEnd = segEndUtc.isBefore(endUtc) ? segEndUtc : endUtc;
-      final seconds = overlapEnd.difference(overlapStart).inSeconds;
-      if (seconds <= 0) continue;
-
-      String key;
-      String entity;
-      String label;
-      String? subtitle;
-
-      if (kind == "domain") {
-        final domain = rawEntity.toLowerCase();
-        final rawTitle = (s.title ?? "").trim();
-        final normTitle =
-            _coreStoreTitles ? normalizeWebTitle(domain, rawTitle) : "";
-        if (_coreStoreTitles && normTitle.isNotEmpty) {
-          key = "domain|$domain|$normTitle";
-          entity = domain;
-          label = normTitle;
-          subtitle = displayEntity(domain);
-        } else {
-          key = "domain|$domain";
-          entity = domain;
-          label = displayEntity(domain);
-          subtitle = null;
-        }
-      } else {
-        final appEntity = rawEntity;
-        final appLabel = displayEntity(appEntity);
-        final title = (s.title ?? "").trim();
-
-        final labelLc = appLabel.toLowerCase();
-        final isVscode = labelLc == "code" ||
-            labelLc == "vscode" ||
-            title.contains("Visual Studio Code");
-        final ws = (_coreStoreTitles && isVscode && title.isNotEmpty)
-            ? extractVscodeWorkspace(title)
-            : null;
-        if (ws != null && ws.trim().isNotEmpty) {
-          final w = ws.trim();
-          key = "app|$appEntity|$w";
-          entity = appEntity;
-          label = appLabel;
-          subtitle = "Workspace: $w";
-        } else {
-          key = "app|$appEntity";
-          entity = appEntity;
-          label = appLabel;
-          subtitle = null;
-          if (_coreStoreTitles &&
-              title.isNotEmpty &&
-              !_isBrowserLabel(appLabel)) {
-            subtitle = title;
-          }
-        }
-      }
-
-      secByKey[key] = (secByKey[key] ?? 0) + seconds;
-      kindByKey[key] = kind;
-      entityByKey[key] = entity;
-      labelByKey[key] = label;
-      subtitleByKey[key] =
-          (subtitleByKey[key] == null || subtitleByKey[key]!.trim().isEmpty)
-              ? subtitle
-              : subtitleByKey[key];
-    }
-
-    final out = <_RangeStatItem>[];
-    for (final k in secByKey.keys) {
+    final out = <DayTimelineLane>[];
+    for (final e in visibleEntries) {
+      final l = e.value;
+      l.bars.sort((a, b) => a.startMinute.compareTo(b.startMinute));
       out.add(
-        _RangeStatItem(
-          kind: kindByKey[k] ?? "",
-          entity: entityByKey[k] ?? "",
-          label: labelByKey[k] ?? "",
-          subtitle: subtitleByKey[k],
-          seconds: secByKey[k] ?? 0,
-          audio: audio,
+        DayTimelineLane(
+          kind: l.kind,
+          entity: l.entity,
+          label: l.label,
+          subtitle: l.subtitle,
+          icon: l.icon,
+          totalSeconds: l.totalSeconds,
+          bars: l.bars,
         ),
       );
     }
-    out.sort((a, b) => b.seconds.compareTo(a.seconds));
-    if (out.length > 6) return out.take(6).toList();
-    return out;
+
+    return (lanes: out, totalCount: totalCount);
   }
 
-  List<_RangeStatItem> _blockRangeItems(BlockSummary b, {required bool audio}) {
-    try {
-      final startUtc = DateTime.parse(b.startTs).toUtc();
-      final endUtc = DateTime.parse(b.endTs).toUtc();
-      return _aggregateSegmentsForRange(
-          startUtc: startUtc, endUtc: endUtc, audio: audio);
-    } catch (_) {
-      return const [];
-    }
+  Widget _dayTimelineWidgetCached({
+    required BuildContext context,
+    required List<DayTimelineLane> lanes,
+    required bool viewingToday,
+  }) {
+    final key = "${_timelineCacheKey}|z:${_timelineZoom.toStringAsFixed(2)}"
+        "|now:${viewingToday ? 1 : 0}";
+    final cached = _dayTimelineWidgetCache;
+    if (cached != null && key == _dayTimelineWidgetKey) return cached;
+
+    final w = DayTimeline(
+      lanes: lanes,
+      showNowIndicator: viewingToday,
+      zoom: _timelineZoom,
+      horizontalController: _timelineH,
+      onLaneTap: (lane) {
+        final subtitle = (lane.subtitle ?? "").trim();
+        final preferWorkspace = lane.kind == "app" &&
+            subtitle.toLowerCase().startsWith("workspace:");
+        final label = preferWorkspace ? subtitle : lane.label;
+        _openReviewForEntity(
+            kind: lane.kind, entity: lane.entity, label: label);
+      },
+      onBarTap: (_, bar) {
+        final b = _findBlockForTimelineBar(bar);
+        if (b == null) {
+          final messenger = ScaffoldMessenger.of(context);
+          messenger.clearSnackBars();
+          messenger.showSnackBar(
+            const SnackBar(
+              duration: Duration(seconds: 3),
+              showCloseIcon: true,
+              content: Text("No matching block"),
+            ),
+          );
+          return;
+        }
+        unawaited(_openBlock(b));
+      },
+    );
+
+    _dayTimelineWidgetKey = key;
+    _dayTimelineWidgetCache = w;
+    return w;
   }
 
-  String _blockTopLine(BlockSummary b) {
-    final focus = _blockRangeItems(b, audio: false);
-    if (focus.isEmpty) {
-      return b.topItems
-          .take(3)
-          .map(
-              (it) => "${displayTopItemName(it)} ${formatDuration(it.seconds)}")
-          .join(" · ");
-    }
-    return focus.take(3).map((it) {
-      final sub = (it.subtitle ?? "").trim();
-      final preferWorkspace =
-          it.kind == "app" && sub.toLowerCase().startsWith("workspace:");
-      final name = preferWorkspace ? sub : it.label;
-      return "${name.trim().isEmpty ? "(unknown)" : name.trim()} ${formatDuration(it.seconds)}";
-    }).join(" · ");
+  List<_FlowItem> _flowItemsCached() {
+    final dayKey = "${_day.year}-${_day.month}-${_day.day}";
+    final key =
+        "$dayKey|$_segmentsVersion|${_topFilter.index}|${_coreStoreTitles ? 1 : 0}";
+    final cached = _flowCache;
+    if (cached != null && key == _flowCacheKey) return cached;
+
+    final next = _buildFlowItems();
+    _flowCacheKey = key;
+    _flowCache = next;
+    return next;
   }
 
-  _RangeStatItem? _blockAudioTop(BlockSummary b) {
-    final audio = _blockRangeItems(b, audio: true);
-    if (audio.isEmpty) return null;
-    return audio.first;
-  }
-
-  String _hhmm(DateTime t) =>
-      "${t.hour.toString().padLeft(2, "0")}:${t.minute.toString().padLeft(2, "0")}";
-
-  Widget _flowCard(BuildContext context) {
+  List<_FlowItem> _buildFlowItems() {
     final items = <_FlowItem>[];
 
     Iterable<TimelineSegment> segs;
@@ -2364,14 +2369,9 @@ class TodayScreenState extends State<TodayScreen> {
       final rawEntity = s.entity.trim();
       if (rawEntity.isEmpty) continue;
 
-      DateTime start;
-      DateTime end;
-      try {
-        start = DateTime.parse(s.startTs).toLocal();
-        end = DateTime.parse(s.endTs).toLocal();
-      } catch (_) {
-        continue;
-      }
+      final start = s.startLocal;
+      final end = s.endLocal;
+      if (start == null || end == null) continue;
       if (!end.isAfter(start)) continue;
 
       String entity;
@@ -2434,7 +2434,56 @@ class TodayScreenState extends State<TodayScreen> {
     }
 
     final show = items.length <= 10 ? items : items.sublist(items.length - 10);
-    final latestFirst = show.reversed.toList();
+    return show.reversed.toList();
+  }
+
+  String _displayTopItemForBlockLine(TopItem it) {
+    final kind = it.kind;
+    if (kind != "app") return displayTopItemName(it);
+
+    final appEntity = it.entity.trim();
+    final appLabel = displayEntity(appEntity);
+    if (!_coreStoreTitles) return appLabel;
+
+    final title = (it.title ?? "").trim();
+    if (title.isEmpty) return appLabel;
+
+    final labelLc = appLabel.toLowerCase();
+    final isVscode = labelLc == "code" ||
+        labelLc == "vscode" ||
+        title.contains("Visual Studio Code");
+    if (isVscode) {
+      final ws = extractVscodeWorkspace(title);
+      if (ws != null && ws.trim().isNotEmpty) {
+        return "Workspace: ${ws.trim()}";
+      }
+    }
+
+    // Avoid showing document-level titles for general apps in the top line.
+    return appLabel;
+  }
+
+  String _blockTopLine(BlockSummary b) {
+    final items = b.topItems;
+    if (items.isEmpty) return "";
+    return items
+        .take(3)
+        .map((it) =>
+            "${_displayTopItemForBlockLine(it)} ${formatDuration(it.seconds)}")
+        .join(" · ");
+  }
+
+  TopItem? _blockAudioTopItem(BlockSummary b) {
+    final bg = b.backgroundTopItems;
+    if (bg.isEmpty) return null;
+    return bg.first;
+  }
+
+  String _hhmm(DateTime t) =>
+      "${t.hour.toString().padLeft(2, "0")}:${t.minute.toString().padLeft(2, "0")}";
+
+  Widget _flowCard(BuildContext context) {
+    final latestFirst = _flowItemsCached();
 
     return Card(
       child: Padding(
@@ -2526,14 +2575,13 @@ class TodayScreenState extends State<TodayScreen> {
   }
 
   Widget _timelineCard(BuildContext context) {
-    final all = _buildTimelineLanesAll();
-    final hasMore = all.length > 12;
-    final lanes = _timelineShowAll ? all : all.take(12).toList();
+    final model = _timelineModelCached(showAll: _timelineShowAll);
+    final hasMore = model.totalCount > 12;
+    final lanes = model.lanes;
     final viewingToday = _viewingToday();
     final showWeb = _topFilter != _TopFilter.apps;
-    final hasWebSeg = _segments.any((s) => s.kind == "domain");
-    final hasWebTitleSeg = _segments
-        .any((s) => s.kind == "domain" && (s.title ?? "").trim().isNotEmpty);
+    final hasWebSeg = _hasWebSeg;
+    final hasWebTitleSeg = _hasWebTitleSeg;
     final canScrollH = _timelineZoom > 1.01;
 
     return Card(
@@ -2627,34 +2675,10 @@ class TodayScreenState extends State<TodayScreen> {
                   _setTimelineZoom(_timelineZoom * factor);
                 });
               },
-              child: DayTimeline(
+              child: _dayTimelineWidgetCached(
+                context: context,
                 lanes: lanes,
-                showNowIndicator: _viewingToday(),
-                zoom: _timelineZoom,
-                horizontalController: _timelineH,
-                onLaneTap: (lane) {
-                  final subtitle = (lane.subtitle ?? "").trim();
-                  final preferWorkspace = lane.kind == "app" &&
-                      subtitle.toLowerCase().startsWith("workspace:");
-                  final label = preferWorkspace ? subtitle : lane.label;
-                  _openReviewForEntity(
-                      kind: lane.kind, entity: lane.entity, label: label);
-                },
-                onBarTap: (_, bar) {
-                  final b = _findBlockForTimelineBar(bar);
-                  if (b == null) {
-                    final messenger = ScaffoldMessenger.of(context);
-                    messenger.clearSnackBars();
-                    messenger.showSnackBar(
-                      const SnackBar(
-                          duration: Duration(seconds: 3),
-                          showCloseIcon: true,
-                          content: Text("No matching block")),
-                    );
-                    return;
-                  }
-                  unawaited(_openBlock(b));
-                },
+                viewingToday: viewingToday,
               ),
             ),
             if (lanes.isNotEmpty) ...[
@@ -2730,9 +2754,8 @@ class TodayScreenState extends State<TodayScreen> {
     final maxSeconds =
         displayItems.fold<int>(0, (m, it) => it.seconds > m ? it.seconds : m);
     final viewingToday = _viewingToday();
-    final hasWebSeg = _segments.any((s) => s.kind == "domain");
-    final hasWebTitleSeg = _segments
-        .any((s) => s.kind == "domain" && (s.title ?? "").trim().isNotEmpty);
+    final hasWebSeg = _hasWebSeg;
+    final hasWebTitleSeg = _hasWebTitleSeg;
 
     Widget filters() {
       return Align(
@@ -2771,7 +2794,7 @@ class TodayScreenState extends State<TodayScreen> {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
                   onTap: () {
-                    final subtitle = (it.subtitle ?? "").trim();
+                    final subtitle = (_subtitleForStatItem(it) ?? "").trim();
                     final preferWorkspace = it.kind == "app" &&
                         subtitle.toLowerCase().startsWith("workspace:");
                     final label = preferWorkspace ? subtitle : it.label;
@@ -2797,7 +2820,7 @@ class TodayScreenState extends State<TodayScreen> {
                             Expanded(
                               child: Builder(
                                 builder: (context) {
-                                  final subtitle = it.subtitle;
+                                  final subtitle = _subtitleForStatItem(it);
                                   return Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
@@ -2998,7 +3021,7 @@ class TodayScreenState extends State<TodayScreen> {
 
     final viewingToday = _viewingToday();
     final due = _dueBlock;
-    final topAgg = _buildTopAgg();
+    final topAgg = _topAggCached();
     final showEmpty = topAgg.focusSeconds <= 0 && topAgg.audioSeconds <= 0;
 
     final isWide = MediaQuery.of(context).size.width >= 1100;

@@ -171,22 +171,11 @@ class SearchScreenState extends State<SearchScreen> {
       }
 
       final tzOffsetMinutes = DateTime.now().timeZoneOffset.inMinutes;
-      final date = _dateLocal(_day);
-
-      final settingsFuture = widget.client.settings();
-      final blocksFuture = widget.client.blocksToday(
+      final blocks = await widget.client.blocksToday(
         date: _dateLocal(_day),
         tzOffsetMinutes: tzOffsetMinutes,
       );
-      final segsFuture = widget.client
-          .timelineDay(date: date, tzOffsetMinutes: tzOffsetMinutes);
-
-      final settings = await settingsFuture;
-      final blocks = await blocksFuture;
-      final segs = await segsFuture;
-
-      final previews = _buildPreviews(
-          blocks: blocks, segments: segs, storeTitles: settings.storeTitles);
+      final previews = _buildPreviewsFromBlocks(blocks: blocks);
       if (!mounted) return;
       setState(() {
         _blocks = blocks;
@@ -246,164 +235,85 @@ class SearchScreenState extends State<SearchScreen> {
   ({
     Map<String, List<BlockCardItem>> focus,
     Map<String, BlockCardItem> audioTop
-  }) _buildPreviews({
+  }) _buildPreviewsFromBlocks({
     required List<BlockSummary> blocks,
-    required List<TimelineSegment> segments,
-    required bool storeTitles,
   }) {
-    bool isBrowserLabel(String label) {
-      final v = label.toLowerCase();
-      return v == "chrome" ||
-          v == "msedge" ||
-          v == "edge" ||
-          v == "brave" ||
-          v == "vivaldi" ||
-          v == "opera" ||
-          v == "firefox";
+    String guessKind(String entity) {
+      final v = entity.trim();
+      if (v.isEmpty) return "app";
+      if (v.contains("\\") || v.contains("/") || v.contains(":")) return "app";
+      if (!v.contains(".")) return "app";
+      if (v.contains(" ")) return "app";
+      return "domain";
     }
 
-    final parsedSegs =
-        <({TimelineSegment s, DateTime startUtc, DateTime endUtc})>[];
-    for (final s in segments) {
-      try {
-        final startUtc = DateTime.parse(s.startTs).toUtc();
-        final endUtc = DateTime.parse(s.endTs).toUtc();
-        if (!endUtc.isAfter(startUtc)) continue;
-        parsedSegs.add((s: s, startUtc: startUtc, endUtc: endUtc));
-      } catch (_) {
-        // ignore
+    String kindForTopItem(TopItem it) {
+      return (it.kind == "domain" || it.kind == "app")
+          ? it.kind
+          : guessKind(it.entity);
+    }
+
+    BlockCardItem itemFromTopItem(TopItem it, {required bool audio}) {
+      final kind = kindForTopItem(it);
+      if (kind == "domain") {
+        final domain = it.entity.trim().toLowerCase();
+        final rawTitle = (it.title ?? "").trim();
+        final title =
+            rawTitle.isEmpty ? "" : normalizeWebTitle(domain, rawTitle);
+        final label = title.isEmpty ? displayEntity(domain) : title;
+        final subtitle = title.isEmpty ? null : displayEntity(domain);
+        return BlockCardItem(
+          kind: kind,
+          entity: domain,
+          label: label,
+          subtitle: subtitle,
+          seconds: it.seconds,
+          audio: audio,
+        );
       }
-    }
 
-    Map<String, List<BlockCardItem>> buildFor({required bool audio}) {
-      final out = <String, List<BlockCardItem>>{};
+      final appEntity = it.entity.trim();
+      final appLabel = displayEntity(appEntity);
+      String? subtitle;
 
-      for (final b in blocks) {
-        DateTime blockStartUtc;
-        DateTime blockEndUtc;
-        try {
-          blockStartUtc = DateTime.parse(b.startTs).toUtc();
-          blockEndUtc = DateTime.parse(b.endTs).toUtc();
-        } catch (_) {
-          continue;
-        }
-        if (!blockEndUtc.isAfter(blockStartUtc)) continue;
-
-        final secByKey = <String, int>{};
-        final kindByKey = <String, String>{};
-        final entityByKey = <String, String>{};
-        final labelByKey = <String, String>{};
-        final subtitleByKey = <String, String?>{};
-
-        for (final seg in parsedSegs) {
-          final s = seg.s;
-          final isAudio = s.activity == "audio";
-          if (audio != isAudio) continue;
-          if (s.kind != "app" && s.kind != "domain") continue;
-          final rawEntity = s.entity.trim();
-          if (rawEntity.isEmpty) continue;
-
-          if (!seg.endUtc.isAfter(blockStartUtc) ||
-              !blockEndUtc.isAfter(seg.startUtc)) continue;
-          final overlapStart = seg.startUtc.isAfter(blockStartUtc)
-              ? seg.startUtc
-              : blockStartUtc;
-          final overlapEnd =
-              seg.endUtc.isBefore(blockEndUtc) ? seg.endUtc : blockEndUtc;
-          final seconds = overlapEnd.difference(overlapStart).inSeconds;
-          if (seconds <= 0) continue;
-
-          String key;
-          String entity;
-          String label;
-          String? subtitle;
-
-          if (s.kind == "domain") {
-            final domain = rawEntity.toLowerCase();
-            final rawTitle = (s.title ?? "").trim();
-            final normTitle =
-                storeTitles ? normalizeWebTitle(domain, rawTitle) : "";
-            if (storeTitles && normTitle.isNotEmpty) {
-              key = "domain|$domain|$normTitle";
-              entity = domain;
-              label = normTitle;
-              subtitle = displayEntity(domain);
-            } else {
-              key = "domain|$domain";
-              entity = domain;
-              label = displayEntity(domain);
-              subtitle = null;
-            }
-          } else {
-            final appEntity = rawEntity;
-            final appLabel = displayEntity(appEntity);
-            final labelLc = appLabel.toLowerCase();
-            final title = (s.title ?? "").trim();
-            final isVscode = labelLc == "code" ||
-                labelLc == "vscode" ||
-                title.contains("Visual Studio Code");
-            final ws = (storeTitles && isVscode && title.isNotEmpty)
-                ? extractVscodeWorkspace(title)
-                : null;
-
-            if (ws != null && ws.trim().isNotEmpty) {
-              final w = ws.trim();
-              key = "app|$appEntity|$w";
-              entity = appEntity;
-              label = appLabel;
-              subtitle = "Workspace: $w";
-            } else {
-              key = "app|$appEntity";
-              entity = appEntity;
-              label = appLabel;
-              subtitle = null;
-
-              if (storeTitles &&
-                  title.isNotEmpty &&
-                  !isBrowserLabel(appLabel)) {
-                subtitle = title;
-              }
-            }
+      final title = (it.title ?? "").trim();
+      if (title.isNotEmpty) {
+        final labelLc = appLabel.toLowerCase();
+        final isVscode = labelLc == "code" ||
+            labelLc == "vscode" ||
+            title.contains("Visual Studio Code");
+        if (isVscode) {
+          final ws = extractVscodeWorkspace(title);
+          if (ws != null && ws.trim().isNotEmpty) {
+            subtitle = "Workspace: ${ws.trim()}";
           }
-
-          secByKey[key] = (secByKey[key] ?? 0) + seconds;
-          kindByKey[key] = s.kind;
-          entityByKey[key] = entity;
-          labelByKey[key] = label;
-          subtitleByKey[key] =
-              (subtitleByKey[key] == null || subtitleByKey[key]!.trim().isEmpty)
-                  ? subtitle
-                  : subtitleByKey[key];
         }
-
-        final items = <BlockCardItem>[];
-        for (final k in secByKey.keys) {
-          items.add(
-            BlockCardItem(
-              kind: kindByKey[k] ?? "",
-              entity: entityByKey[k] ?? "",
-              label: labelByKey[k] ?? "",
-              subtitle: subtitleByKey[k],
-              seconds: secByKey[k] ?? 0,
-              audio: audio,
-            ),
-          );
-        }
-        items.sort((a, b) => b.seconds.compareTo(a.seconds));
-        out[b.id] = items;
       }
 
-      return out;
+      return BlockCardItem(
+        kind: kind,
+        entity: appEntity,
+        label: appLabel,
+        subtitle: subtitle,
+        seconds: it.seconds,
+        audio: audio,
+      );
     }
 
-    final focus = buildFor(audio: false);
-    final audioItems = buildFor(audio: true);
+    final focus = <String, List<BlockCardItem>>{};
     final audioTop = <String, BlockCardItem>{};
-    for (final e in audioItems.entries) {
-      final list = e.value;
-      if (list.isEmpty) continue;
-      audioTop[e.key] = list.first;
+
+    for (final b in blocks) {
+      focus[b.id] = b.topItems
+          .take(4)
+          .map((it) => itemFromTopItem(it, audio: false))
+          .toList();
+      if (b.backgroundTopItems.isNotEmpty) {
+        audioTop[b.id] =
+            itemFromTopItem(b.backgroundTopItems.first, audio: true);
+      }
     }
+
     return (focus: focus, audioTop: audioTop);
   }
 

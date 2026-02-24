@@ -579,6 +579,35 @@ class TimelineSegment {
   final String endTs;
   final int seconds;
 
+  DateTime? _startUtc;
+  DateTime? _endUtc;
+  DateTime? _startLocal;
+  DateTime? _endLocal;
+
+  DateTime? get startUtc {
+    return _startUtc ??= DateTime.tryParse(startTs)?.toUtc();
+  }
+
+  DateTime? get endUtc {
+    return _endUtc ??= DateTime.tryParse(endTs)?.toUtc();
+  }
+
+  DateTime? get startLocal {
+    final cached = _startLocal;
+    if (cached != null) return cached;
+    final utc = startUtc;
+    if (utc == null) return null;
+    return _startLocal = utc.toLocal();
+  }
+
+  DateTime? get endLocal {
+    final cached = _endLocal;
+    if (cached != null) return cached;
+    final utc = endUtc;
+    if (utc == null) return null;
+    return _endLocal = utc.toLocal();
+  }
+
   factory TimelineSegment.fromJson(Map<String, dynamic> json) {
     return TimelineSegment(
       kind: (json["kind"] as String?) ?? "",

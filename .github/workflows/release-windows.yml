@@ -65,8 +65,29 @@ jobs:
           name: RecorderPhone-${{ github.ref_name }}-windows
           path: ${{ steps.package.outputs.ZIP_PATH }}
 
-      - name: Publish GitHub Release
+      - name: Check release notes
         if: startsWith(github.ref, 'refs/tags/')
+        id: notes
+        shell: pwsh
+        run: |
+          $tag = "${env:GITHUB_REF_NAME}"
+          $notes = Join-Path $env:GITHUB_WORKSPACE ("release-notes\\" + $tag + ".md")
+          if (Test-Path $notes) {
+            "HAS_NOTES=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            "HAS_NOTES=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      - name: Publish GitHub Release (with notes)
+        if: startsWith(github.ref, 'refs/tags/') && steps.notes.outputs.HAS_NOTES == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.package.outputs.ZIP_PATH }}
+          body_path: release-notes/${{ github.ref_name }}.md
+
+      - name: Publish GitHub Release (auto notes)
+        if: startsWith(github.ref, 'refs/tags/') && steps.notes.outputs.HAS_NOTES != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.ZIP_PATH }}
+          generate_release_notes: true
