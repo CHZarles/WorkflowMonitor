@@ -1,7 +1,9 @@
 import "dart:convert";
 import "dart:io";
 
+import "package:path/path.dart" as p;
 import "package:path_provider/path_provider.dart";
+import "package:sqflite/sqflite.dart";
 
 import "mobile_models.dart";
 import "mobile_usage.dart";
@@ -11,90 +13,104 @@ class MobileStore {
 
   MobileStore._();
 
-  File? _file;
-  Map<String, MobileBlock> _byId = {};
-  bool _loaded = false;
+  Database? _db;
+  Future<Database>? _opening;
 
-  Future<File> _ensureFile() async {
-    if (_file != null) return _file!;
-    final dir = await getApplicationSupportDirectory();
-    await dir.create(recursive: true);
-    final path =
-        "${dir.path}${Platform.pathSeparator}recorderphone-mobile.json";
-    _file = File(path);
-    return _file!;
-  }
+  Future<Database> _open() async {
+    if (_db != null) return _db!;
+    if (_opening != null) return _opening!;
 
-  Future<void> _load() async {
-    if (_loaded) return;
-    final file = await _ensureFile();
-    if (!await file.exists()) {
-      _byId = {};
-      _loaded = true;
-      return;
-    }
+    _opening = () async {
+      final dir = await getApplicationSupportDirectory();
+      await dir.create(recursive: true);
+      final dbPath = p.join(dir.path, "recorderphone-mobile.db");
+
+      final db = await openDatabase(
+        dbPath,
+        version: 1,
+        onCreate: (db, _) async {
+          await db.execute("""
+CREATE TABLE IF NOT EXISTS blocks (
+  id TEXT PRIMARY KEY,
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  top_json TEXT NOT NULL,
+  review_json TEXT NULL
+);
+""");
+          await db.execute(
+              "CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_start_ms ON blocks(start_ms);");
+        },
+      );
+
+      // Defensive: ensure schema exists even if `onCreate` was skipped for some reason.
+      await db.execute("""
+CREATE TABLE IF NOT EXISTS blocks (
+  id TEXT PRIMARY KEY,
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  top_json TEXT NOT NULL,
+  review_json TEXT NULL
+);
+""");
+      await db.execute(
+          "CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_start_ms ON blocks(start_ms);");
+
+      _db = db;
+      return db;
+    }();
+
     try {
-      final raw = await file.readAsString();
-      final obj = jsonDecode(raw);
-      final Map<String, MobileBlock> next = {};
-      if (obj is Map && obj["blocks"] is List) {
-        for (final it in (obj["blocks"] as List)) {
-          if (it is Map) {
-            final b = MobileBlock.fromJson(Map<String, dynamic>.from(it));
-            next[b.id] = b;
-          }
-        }
-      }
-      _byId = next;
-      _loaded = true;
-    } catch (_) {
-      // Corrupted file: keep a backup and start fresh.
-      try {
-        final ts =
-            DateTime.now().toUtc().toIso8601String().replaceAll(":", "-");
-        await file.rename("${file.path}.bad.$ts");
-      } catch (_) {
-        // ignore
-      }
-      _byId = {};
-      _loaded = true;
+      return await _opening!;
+    } finally {
+      _opening = null;
     }
-  }
-
-  Future<void> _persist() async {
-    final file = await _ensureFile();
-    final blocks = _byId.values.toList()
-      ..sort((a, b) => a.startMs.compareTo(b.startMs));
-    final obj = {
-      "schema": 1,
-      "updated_at_iso": DateTime.now().toUtc().toIso8601String(),
-      "blocks": blocks.map((b) => b.toJson()).toList(),
-    };
-    final text = const JsonEncoder.withIndent("  ").convert(obj);
-
-    final tmp = File("${file.path}.tmp");
-    await tmp.writeAsString(text);
-    try {
-      if (await file.exists()) {
-        await file.delete();
-      }
-    } catch (_) {
-      // ignore
-    }
-    await tmp.rename(file.path);
   }
 
   Future<List<MobileBlock>> listBlocksForDay(DateTime dayLocal) async {
-    await _load();
+    final db = await _open();
     final start = DateTime(dayLocal.year, dayLocal.month, dayLocal.day);
     final end = start.add(const Duration(days: 1));
     final startMs = start.millisecondsSinceEpoch;
     final endMs = end.millisecondsSinceEpoch;
 
-    final out = _byId.values
-        .where((b) => b.startMs >= startMs && b.startMs < endMs)
-        .toList()
-      ..sort((a, b) => a.startMs.compareTo(b.startMs));
+    final rows = await db.rawQuery(
+      "SELECT id, start_ms, end_ms, top_json, review_json FROM blocks WHERE start_ms >= ? AND start_ms < ? ORDER BY start_ms ASC",
+      [startMs, endMs],
+    );
+
+    final out = <MobileBlock>[];
+    for (final r in rows) {
+      final id = (r["id"] ?? "").toString();
+      final sRaw = r["start_ms"];
+      final eRaw = r["end_ms"];
+      final startMs = sRaw is int ? sRaw : int.tryParse(sRaw.toString()) ?? 0;
+      final endMs = eRaw is int ? eRaw : int.tryParse(eRaw.toString()) ?? 0;
+
+      final topRaw = (r["top_json"] ?? "[]").toString();
+      final topObj = jsonDecode(topRaw);
+      final top = <MobileTopItem>[];
+      if (topObj is List) {
+        for (final it in topObj) {
+          if (it is Map) top.add(MobileTopItem.fromJson(it));
+        }
+      }
+
+      MobileReview? review;
+      final reviewRaw = (r["review_json"] ?? "").toString();
+      if (reviewRaw.trim().isNotEmpty) {
+        final obj = jsonDecode(reviewRaw);
+        if (obj is Map) review = MobileReview.fromJson(obj);
+      }
+
+      out.add(MobileBlock(
+        id: id,
+        startMs: startMs,
+        endMs: endMs,
+        topItems: top,
+        review: review,
+      ));
+    }
     return out;
   }
 
@@ -106,10 +122,7 @@ class MobileStore {
     String? next,
     required List<String> tags,
   }) async {
-    await _load();
-    final b = _byId[blockId];
-    if (b == null) return;
-
+    final db = await _open();
     final review = MobileReview(
       updatedAtIso: DateTime.now().toUtc().toIso8601String(),
       skipped: skipped,
@@ -118,14 +131,10 @@ class MobileStore {
       next: (next ?? "").trim().isEmpty ? null : next!.trim(),
       tags: tags,
     );
-    _byId[blockId] = MobileBlock(
-      id: b.id,
-      startMs: b.startMs,
-      endMs: b.endMs,
-      topItems: b.topItems,
-      review: review,
+    await db.rawUpdate(
+      "UPDATE blocks SET review_json = ? WHERE id = ?",
+      [jsonEncode(review.toJson()), blockId],
     );
-    await _persist();
   }
 
   Future<void> ensureBlocksForToday({required Duration blockSize}) async {
@@ -138,7 +147,7 @@ class MobileStore {
     required DateTime dayLocal,
     required Duration blockSize,
   }) async {
-    await _load();
+    final db = await _open();
     final start = DateTime(dayLocal.year, dayLocal.month, dayLocal.day);
     final now = DateTime.now();
     final blockMs = blockSize.inMilliseconds;
@@ -147,32 +156,27 @@ class MobileStore {
     final dayStartMs = start.millisecondsSinceEpoch;
     final nowMs = now.millisecondsSinceEpoch;
 
-    var changed = false;
-
-    // Only create *completed* blocks: [t, t+block] where end <= now.
     for (var s = dayStartMs; s + blockMs <= nowMs; s += blockMs) {
-      final id = "a-${s.toString()}";
-      if (_byId.containsKey(id)) continue;
-
       final e = s + blockMs;
+
+      final exists = await db.rawQuery(
+        "SELECT 1 FROM blocks WHERE start_ms = ? LIMIT 1",
+        [s],
+      );
+      if (exists.isNotEmpty) continue;
+
       final items =
           await MobileUsage.instance.queryTopApps(startMs: s, endMs: e);
-      _byId[id] = MobileBlock(
-        id: id,
-        startMs: s,
-        endMs: e,
-        topItems: items,
-        review: null,
+      final id = "a-${s.toString()}";
+      await db.rawInsert(
+        "INSERT INTO blocks(id, start_ms, end_ms, top_json, review_json) VALUES(?, ?, ?, ?, NULL)",
+        [id, s, e, jsonEncode(items.map((it) => it.toJson()).toList())],
       );
-      changed = true;
     }
-
-    if (changed) await _persist();
   }
 
   Future<void> wipeAll() async {
-    await _load();
-    _byId = {};
-    await _persist();
+    final db = await _open();
+    await db.execute("DELETE FROM blocks");
   }
 }
