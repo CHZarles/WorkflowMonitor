@@ -3,6 +3,7 @@ import "package:flutter/material.dart";
 import "../api/core_client.dart";
 import "../theme/tokens.dart";
 import "../utils/format.dart";
+import "recorder_tooltip.dart";
 
 class BlockCardItem {
   const BlockCardItem({
@@ -42,7 +43,10 @@ class BlockCard extends StatelessWidget {
     final doing = (r.doing ?? "").trim();
     final output = (r.output ?? "").trim();
     final next = (r.next ?? "").trim();
-    return doing.isNotEmpty || output.isNotEmpty || next.isNotEmpty || r.tags.isNotEmpty;
+    return doing.isNotEmpty ||
+        output.isNotEmpty ||
+        next.isNotEmpty ||
+        r.tags.isNotEmpty;
   }
 
   String _preview(BlockReview r) {
@@ -85,10 +89,14 @@ class BlockCard extends StatelessWidget {
     Widget pill(BlockCardItem it) {
       final label = it.label.trim().isEmpty ? "(unknown)" : it.label.trim();
       final duration = formatDuration(it.seconds);
-      return Tooltip(
-        message: it.subtitle == null ? "$label · $duration" : "$label\n${it.subtitle}\n$duration",
+      return RecorderTooltip(
+        message: it.subtitle == null
+            ? "$label · $duration"
+            : "$label\n${it.subtitle}\n$duration",
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: RecorderTokens.space2, vertical: RecorderTokens.space1),
+          padding: const EdgeInsets.symmetric(
+              horizontal: RecorderTokens.space2,
+              vertical: RecorderTokens.space1),
           decoration: BoxDecoration(
             color: scheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(999),
@@ -116,9 +124,13 @@ class BlockCard extends StatelessWidget {
       );
     }
 
-    final focusItems = (previewFocus ?? const []).where((it) => !it.audio).toList();
+    final focusItems =
+        (previewFocus ?? const []).where((it) => !it.audio).toList();
     final showFocusItems = focusItems.isNotEmpty;
-    final topTextFallback = block.topItems.take(3).map((e) => "${displayTopItemName(e)} ${formatDuration(e.seconds)}").join(" · ");
+    final topTextFallback = block.topItems
+        .take(3)
+        .map((e) => "${displayTopItemName(e)} ${formatDuration(e.seconds)}")
+        .join(" · ");
 
     return Card(
       child: InkWell(
@@ -132,9 +144,10 @@ class BlockCard extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+                    child: Text(title,
+                        style: Theme.of(context).textTheme.titleMedium),
                   ),
-                  Tooltip(
+                  RecorderTooltip(
                     message: statusTip,
                     child: Icon(
                       statusIcon,
@@ -154,12 +167,15 @@ class BlockCard extends StatelessWidget {
                   ],
                 )
               else
-                Text(topTextFallback, style: Theme.of(context).textTheme.bodyMedium),
+                Text(topTextFallback,
+                    style: Theme.of(context).textTheme.bodyMedium),
               if (previewAudioTop == null && bgTop != null) ...[
                 const SizedBox(height: RecorderTokens.space2),
                 Row(
                   children: [
-                    Icon(Icons.headphones, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    Icon(Icons.headphones,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant),
                     const SizedBox(width: RecorderTokens.space1),
                     Expanded(
                       child: Text(

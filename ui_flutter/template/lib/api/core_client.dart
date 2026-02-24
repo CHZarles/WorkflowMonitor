@@ -10,17 +10,25 @@ class HealthInfo {
 }
 
 class CoreClient {
-  CoreClient({required this.baseUrl});
+  CoreClient({required this.baseUrl, http.Client? httpClient})
+      : _http = httpClient ?? http.Client();
 
   final String baseUrl;
+  final http.Client _http;
+
+  void close() {
+    _http.close();
+  }
 
   Uri _u(String path, [Map<String, String>? q]) {
-    final trimmed = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final trimmed = baseUrl.endsWith("/")
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
     return Uri.parse("$trimmed$path").replace(queryParameters: q);
   }
 
   Future<bool> health() async {
-    final res = await http.get(_u("/health"));
+    final res = await _http.get(_u("/health"));
     return res.statusCode == 200;
   }
 
@@ -59,32 +67,42 @@ class CoreClient {
   }
 
   Future<HealthInfo> healthInfo() async {
-    final res = await http.get(_u("/health"));
+    final res = await _http.get(_u("/health"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
     final obj = jsonDecode(res.body) as Map<String, dynamic>;
-    final data = (obj["data"] is Map<String, dynamic>) ? (obj["data"] as Map<String, dynamic>) : obj;
-    final service = data["service"] is String ? (data["service"] as String) : null;
-    final version = data["version"] is String ? (data["version"] as String) : null;
+    final data = (obj["data"] is Map<String, dynamic>)
+        ? (obj["data"] as Map<String, dynamic>)
+        : obj;
+    final service =
+        data["service"] is String ? (data["service"] as String) : null;
+    final version =
+        data["version"] is String ? (data["version"] as String) : null;
     return HealthInfo(service: service, version: version);
   }
 
-  Future<List<BlockSummary>> blocksToday({required String date, required int tzOffsetMinutes}) async {
-    final res = await http.get(
-      _u("/blocks/today", {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
+  Future<List<BlockSummary>> blocksToday(
+      {required String date, required int tzOffsetMinutes}) async {
+    final res = await _http.get(
+      _u("/blocks/today",
+          {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
     );
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
     final obj = jsonDecode(res.body) as Map<String, dynamic>;
     final data = (obj["data"] as List<dynamic>? ?? const []);
-    return data.map((e) => BlockSummary.fromJson(e as Map<String, dynamic>)).toList();
+    return data
+        .map((e) => BlockSummary.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
-  Future<BlockSummary?> blocksDue({required String date, required int tzOffsetMinutes}) async {
-    final res = await http.get(
-      _u("/blocks/due", {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
+  Future<BlockSummary?> blocksDue(
+      {required String date, required int tzOffsetMinutes}) async {
+    final res = await _http.get(
+      _u("/blocks/due",
+          {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
     );
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
@@ -96,20 +114,24 @@ class CoreClient {
     return BlockSummary.fromJson(data);
   }
 
-  Future<List<TimelineSegment>> timelineDay({required String date, required int tzOffsetMinutes}) async {
-    final res = await http.get(
-      _u("/timeline/day", {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
+  Future<List<TimelineSegment>> timelineDay(
+      {required String date, required int tzOffsetMinutes}) async {
+    final res = await _http.get(
+      _u("/timeline/day",
+          {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
     );
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
     final obj = jsonDecode(res.body) as Map<String, dynamic>;
     final data = (obj["data"] as List<dynamic>? ?? const []);
-    return data.map((e) => TimelineSegment.fromJson(e as Map<String, dynamic>)).toList();
+    return data
+        .map((e) => TimelineSegment.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<void> upsertReview(ReviewUpsert r) async {
-    final res = await http.post(
+    final res = await _http.post(
       _u("/blocks/review"),
       headers: {"content-type": "application/json"},
       body: jsonEncode(r.toJson()),
@@ -121,18 +143,20 @@ class CoreClient {
 
   Future<List<EventRecord>> events({int limit = 50}) async {
     final l = limit.clamp(1, 500).toString();
-    final res = await http.get(_u("/events", {"limit": l}));
+    final res = await _http.get(_u("/events", {"limit": l}));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
     final obj = jsonDecode(res.body) as Map<String, dynamic>;
     final data = (obj["data"] as List<dynamic>? ?? const []);
-    return data.map((e) => EventRecord.fromJson(e as Map<String, dynamic>)).toList();
+    return data
+        .map((e) => EventRecord.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<NowSnapshot> now({int limit = 200}) async {
     final l = limit.clamp(1, 2000).toString();
-    final res = await http.get(_u("/now", {"limit": l}));
+    final res = await _http.get(_u("/now", {"limit": l}));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
@@ -143,7 +167,7 @@ class CoreClient {
   }
 
   Future<TrackingStatus> trackingStatus() async {
-    final res = await http.get(_u("/tracking/status"));
+    final res = await _http.get(_u("/tracking/status"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
@@ -155,7 +179,7 @@ class CoreClient {
 
   Future<TrackingStatus> pauseTracking({int? minutes}) async {
     final body = minutes == null ? <String, dynamic>{} : {"minutes": minutes};
-    final res = await http.post(
+    final res = await _http.post(
       _u("/tracking/pause"),
       headers: {"content-type": "application/json"},
       body: jsonEncode(body),
@@ -170,7 +194,7 @@ class CoreClient {
   }
 
   Future<TrackingStatus> resumeTracking() async {
-    final res = await http.post(_u("/tracking/resume"));
+    final res = await _http.post(_u("/tracking/resume"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
@@ -181,7 +205,7 @@ class CoreClient {
   }
 
   Future<CoreSettings> settings() async {
-    final res = await http.get(_u("/settings"));
+    final res = await _http.get(_u("/settings"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
@@ -203,7 +227,8 @@ class CoreClient {
   }) async {
     final body = <String, dynamic>{};
     if (blockSeconds != null) body["block_seconds"] = blockSeconds;
-    if (idleCutoffSeconds != null) body["idle_cutoff_seconds"] = idleCutoffSeconds;
+    if (idleCutoffSeconds != null)
+      body["idle_cutoff_seconds"] = idleCutoffSeconds;
     // Privacy-level toggles (Core controls what is persisted even if collectors send more fields).
     if (storeTitles != null) body["store_titles"] = storeTitles;
     if (storeExePath != null) body["store_exe_path"] = storeExePath;
@@ -218,7 +243,7 @@ class CoreClient {
       body["review_notify_when_idle"] = reviewNotifyWhenIdle;
     }
 
-    final res = await http.post(
+    final res = await _http.post(
       _u("/settings"),
       headers: {"content-type": "application/json"},
       body: jsonEncode(body),
@@ -232,8 +257,9 @@ class CoreClient {
     return CoreSettings.fromJson(data);
   }
 
-  Future<DeleteRangeResult> deleteBlock({required String startTs, required String endTs}) async {
-    final res = await http.post(
+  Future<DeleteRangeResult> deleteBlock(
+      {required String startTs, required String endTs}) async {
+    final res = await _http.post(
       _u("/blocks/delete"),
       headers: {"content-type": "application/json"},
       body: jsonEncode({"start_ts": startTs, "end_ts": endTs}),
@@ -247,8 +273,9 @@ class CoreClient {
     return DeleteRangeResult.fromJson(data);
   }
 
-  Future<DeleteDayResult> deleteDay({required String date, required int tzOffsetMinutes}) async {
-    final res = await http.post(
+  Future<DeleteDayResult> deleteDay(
+      {required String date, required int tzOffsetMinutes}) async {
+    final res = await _http.post(
       _u("/data/delete_day"),
       headers: {"content-type": "application/json"},
       body: jsonEncode({"date": date, "tz_offset_minutes": tzOffsetMinutes}),
@@ -263,7 +290,7 @@ class CoreClient {
   }
 
   Future<WipeAllResult> wipeAllData() async {
-    final res = await http.post(
+    final res = await _http.post(
       _u("/data/wipe"),
       headers: {"content-type": "application/json"},
       body: jsonEncode({}),
@@ -278,17 +305,19 @@ class CoreClient {
   }
 
   Future<List<PrivacyRule>> privacyRules() async {
-    final res = await http.get(_u("/privacy/rules"));
+    final res = await _http.get(_u("/privacy/rules"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
     final obj = jsonDecode(res.body) as Map<String, dynamic>;
     final data = (obj["data"] as List<dynamic>? ?? const []);
-    return data.map((e) => PrivacyRule.fromJson(e as Map<String, dynamic>)).toList();
+    return data
+        .map((e) => PrivacyRule.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<PrivacyRule> upsertPrivacyRule(PrivacyRuleUpsert r) async {
-    final res = await http.post(
+    final res = await _http.post(
       _u("/privacy/rules"),
       headers: {"content-type": "application/json"},
       body: jsonEncode(r.toJson()),
@@ -303,15 +332,17 @@ class CoreClient {
   }
 
   Future<void> deletePrivacyRule(int id) async {
-    final res = await http.delete(_u("/privacy/rules/$id"));
+    final res = await _http.delete(_u("/privacy/rules/$id"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
   }
 
-  Future<String> exportMarkdown({required String date, required int tzOffsetMinutes}) async {
-    final res = await http.get(
-      _u("/export/markdown", {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
+  Future<String> exportMarkdown(
+      {required String date, required int tzOffsetMinutes}) async {
+    final res = await _http.get(
+      _u("/export/markdown",
+          {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
     );
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
@@ -319,9 +350,11 @@ class CoreClient {
     return res.body;
   }
 
-  Future<String> exportCsv({required String date, required int tzOffsetMinutes}) async {
-    final res = await http.get(
-      _u("/export/csv", {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
+  Future<String> exportCsv(
+      {required String date, required int tzOffsetMinutes}) async {
+    final res = await _http.get(
+      _u("/export/csv",
+          {"date": date, "tz_offset_minutes": tzOffsetMinutes.toString()}),
     );
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
@@ -330,17 +363,19 @@ class CoreClient {
   }
 
   Future<List<ReportSummary>> reports({int limit = 50}) async {
-    final res = await http.get(_u("/reports", {"limit": limit.toString()}));
+    final res = await _http.get(_u("/reports", {"limit": limit.toString()}));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
     final obj = jsonDecode(res.body) as Map<String, dynamic>;
     final data = (obj["data"] as List<dynamic>? ?? const []);
-    return data.map((e) => ReportSummary.fromJson(e as Map<String, dynamic>)).toList();
+    return data
+        .map((e) => ReportSummary.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<ReportSettings> reportSettings() async {
-    final res = await http.get(_u("/reports/settings"));
+    final res = await _http.get(_u("/reports/settings"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
@@ -382,7 +417,7 @@ class CoreClient {
     if (saveCsv != null) body["save_csv"] = saveCsv;
     if (outputDir != null) body["output_dir"] = outputDir;
 
-    final res = await http.post(
+    final res = await _http.post(
       _u("/reports/settings"),
       headers: {"content-type": "application/json"},
       body: jsonEncode(body),
@@ -407,7 +442,7 @@ class CoreClient {
     if (date != null) body["date"] = date;
     if (tzOffsetMinutes != null) body["tz_offset_minutes"] = tzOffsetMinutes;
 
-    final res = await http.post(
+    final res = await _http.post(
       _u("/reports/generate/daily"),
       headers: {"content-type": "application/json"},
       body: jsonEncode(body),
@@ -432,7 +467,7 @@ class CoreClient {
     if (weekStart != null) body["week_start"] = weekStart;
     if (tzOffsetMinutes != null) body["tz_offset_minutes"] = tzOffsetMinutes;
 
-    final res = await http.post(
+    final res = await _http.post(
       _u("/reports/generate/weekly"),
       headers: {"content-type": "application/json"},
       body: jsonEncode(body),
@@ -448,7 +483,7 @@ class CoreClient {
 
   Future<ReportRecord> reportById(String id) async {
     final rid = id.trim();
-    final res = await http.get(_u("/reports/$rid"));
+    final res = await _http.get(_u("/reports/$rid"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
@@ -459,7 +494,7 @@ class CoreClient {
   }
 
   Future<ReportRecord> upsertReport(ReportUpsert r) async {
-    final res = await http.post(
+    final res = await _http.post(
       _u("/reports"),
       headers: {"content-type": "application/json"},
       body: jsonEncode(r.toJson()),
@@ -476,7 +511,7 @@ class CoreClient {
   Future<void> deleteReport(String id) async {
     final rid = id.trim();
     if (rid.isEmpty) return;
-    final res = await http.delete(_u("/reports/$rid"));
+    final res = await _http.delete(_u("/reports/$rid"));
     if (res.statusCode != 200) {
       throw Exception("http_${res.statusCode}");
     }
@@ -513,11 +548,14 @@ class BlockSummary {
       topItems: (json["top_items"] as List<dynamic>? ?? const [])
           .map((e) => TopItem.fromJson(e as Map<String, dynamic>))
           .toList(),
-      backgroundTopItems: (json["background_top_items"] as List<dynamic>? ?? const [])
-          .map((e) => TopItem.fromJson(e as Map<String, dynamic>))
-          .toList(),
+      backgroundTopItems:
+          (json["background_top_items"] as List<dynamic>? ?? const [])
+              .map((e) => TopItem.fromJson(e as Map<String, dynamic>))
+              .toList(),
       backgroundSeconds: json["background_seconds"] as int?,
-      review: json["review"] == null ? null : BlockReview.fromJson(json["review"] as Map<String, dynamic>),
+      review: json["review"] == null
+          ? null
+          : BlockReview.fromJson(json["review"] as Map<String, dynamic>),
     );
   }
 }
@@ -568,7 +606,8 @@ class TopItem {
   final int seconds;
 
   factory TopItem.fromJson(Map<String, dynamic> json) {
-    final rawEntity = (json["entity"] as String?) ?? (json["name"] as String?) ?? "";
+    final rawEntity =
+        (json["entity"] as String?) ?? (json["name"] as String?) ?? "";
     return TopItem(
       kind: (json["kind"] as String?) ?? "unknown",
       entity: rawEntity,
@@ -604,7 +643,9 @@ class BlockReview {
       doing: json["doing"] as String?,
       output: json["output"] as String?,
       next: json["next"] as String?,
-      tags: (json["tags"] as List<dynamic>? ?? const []).map((e) => e.toString()).toList(),
+      tags: (json["tags"] as List<dynamic>? ?? const [])
+          .map((e) => e.toString())
+          .toList(),
       updatedAt: json["updated_at"] as String,
     );
   }
@@ -719,7 +760,8 @@ class NowSnapshot {
   final EventRecord? nowFocusApp;
   final EventRecord? nowUsingTab;
   final EventRecord? nowBackgroundAudio;
-  final Map<String, String> latestTitles; // key: "app|<entity>" or "domain|<hostname>"
+  final Map<String, String>
+      latestTitles; // key: "app|<entity>" or "domain|<hostname>"
 
   factory NowSnapshot.fromJson(Map<String, dynamic> json) {
     EventRecord? parseEvent(String key) {
@@ -821,8 +863,7 @@ class CoreSettings {
           (json["review_notify_repeat_minutes"] as int?) ?? 10,
       reviewNotifyWhenPaused:
           (json["review_notify_when_paused"] as bool?) ?? false,
-      reviewNotifyWhenIdle:
-          (json["review_notify_when_idle"] as bool?) ?? false,
+      reviewNotifyWhenIdle: (json["review_notify_when_idle"] as bool?) ?? false,
     );
   }
 }

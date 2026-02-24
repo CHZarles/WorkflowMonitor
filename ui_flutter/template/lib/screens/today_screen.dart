@@ -14,6 +14,7 @@ import "../widgets/block_detail_sheet.dart";
 import "../widgets/day_timeline.dart";
 import "../widgets/entity_avatar.dart";
 import "../widgets/quick_review_sheet.dart";
+import "../widgets/recorder_tooltip.dart";
 
 class TodayScreen extends StatefulWidget {
   const TodayScreen({
@@ -25,6 +26,7 @@ class TodayScreen extends StatefulWidget {
     this.onOpenReviewQuery,
     this.tutorialNowKey,
     this.tutorialTimelineKey,
+    this.isActive = true,
   });
 
   final CoreClient client;
@@ -34,6 +36,7 @@ class TodayScreen extends StatefulWidget {
   final Future<void> Function(String query, DateTime day)? onOpenReviewQuery;
   final GlobalKey? tutorialNowKey;
   final GlobalKey? tutorialTimelineKey;
+  final bool isActive;
 
   @override
   State<TodayScreen> createState() => TodayScreenState();
@@ -153,8 +156,9 @@ class TodayScreenState extends State<TodayScreen> {
   int _reviewMinSeconds = 5 * 60;
   int _reviewRepeatMinutes = 10;
   bool _reviewNotifyWhenPaused = false;
-  bool _loading = true;
+  bool _loading = false;
   String? _error;
+  DateTime? _coreSettingsUpdatedAt;
   List<TimelineSegment> _segments = const [];
   List<BlockSummary> _blocks = const [];
   BlockSummary? _dueBlock;
@@ -174,12 +178,15 @@ class TodayScreenState extends State<TodayScreen> {
 
   Timer? _nowTimer;
   Timer? _blocksTimer;
+  Timer? _autoRetryTimer;
+  int _autoRetryAttempts = 0;
   bool _promptShowing = false;
   bool _refreshingNow = false;
   bool _refreshingBlocks = false;
   bool _timelineShowAll = false;
   bool _timelineSortByTime = false;
   double _timelineZoom = 1.0;
+  final ScrollController _scrollV = ScrollController();
   final ScrollController _timelineH = ScrollController();
   _TimelineViewState? _timelineSavedView;
   DateTime? _nowUpdatedAt;
@@ -201,13 +208,15 @@ class TodayScreenState extends State<TodayScreen> {
     _loadReminderPrefs();
     _loadCoreSettings();
     _loadRules();
-    refresh(triggerReminder: _viewingToday());
+    refresh(silent: true, triggerReminder: _viewingToday());
     _nowTimer = Timer.periodic(const Duration(seconds: _nowPollSeconds), (_) {
+      if (!widget.isActive) return;
       if (!_viewingToday()) return;
       _refreshNow(silent: true, kickBlocksOnChange: true);
     });
     _blocksTimer =
         Timer.periodic(const Duration(seconds: _blocksPollSeconds), (_) {
+      if (!widget.isActive) return;
       if (!_viewingToday()) return;
       _refreshBlocks(silent: true, triggerReminder: true);
     });
@@ -220,14 +229,89 @@ class TodayScreenState extends State<TodayScreen> {
       _loadRules();
       refresh(triggerReminder: _viewingToday());
     }
+    if (!oldWidget.isActive && widget.isActive) {
+      refresh(silent: true, triggerReminder: _viewingToday());
+    }
   }
 
   @override
   void dispose() {
     _nowTimer?.cancel();
     _blocksTimer?.cancel();
+    _autoRetryTimer?.cancel();
+    _scrollV.dispose();
     _timelineH.dispose();
     super.dispose();
+  }
+
+  Future<void> _scrollToTutorialKey(GlobalKey? key) async {
+    if (key == null) return;
+    for (var i = 0; i < 20; i++) {
+      if (_scrollV.hasClients) break;
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    if (!_scrollV.hasClients) return;
+
+    Future<void> ensureIfPossible() async {
+      final ctx = key.currentContext;
+      if (ctx == null) return;
+      try {
+        await Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.15,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await WidgetsBinding.instance.endOfFrame;
+      } catch (_) {
+        // best effort
+      }
+    }
+
+    await ensureIfPossible();
+    if (key.currentContext != null) return;
+
+    // Deterministic: start near top, then gradually scroll down until the target is built.
+    try {
+      _scrollV.jumpTo(0);
+    } catch (_) {
+      // ignore
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await WidgetsBinding.instance.endOfFrame;
+
+    for (var i = 0; i < 18; i++) {
+      await ensureIfPossible();
+      if (key.currentContext != null) return;
+      if (!_scrollV.hasClients) return;
+
+      final pos = _scrollV.position;
+      final step = (pos.viewportDimension * 0.85).clamp(180.0, 900.0);
+      final next =
+          (pos.pixels + step).clamp(0.0, pos.maxScrollExtent).toDouble();
+      if ((next - pos.pixels).abs() < 1) return;
+
+      try {
+        await _scrollV.animateTo(
+          next,
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOut,
+        );
+      } catch (_) {
+        return;
+      }
+      await WidgetsBinding.instance.endOfFrame;
+    }
+  }
+
+  Future<void> scrollToTutorialNow() async {
+    await _scrollToTutorialKey(widget.tutorialNowKey);
+  }
+
+  Future<void> scrollToTutorialTimeline() async {
+    await _scrollToTutorialKey(widget.tutorialTimelineKey);
   }
 
   DateTime _normalizeDay(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -372,7 +456,11 @@ class TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  Future<void> _loadCoreSettings() async {
+  Future<void> _loadCoreSettings({bool force = false}) async {
+    if (!force && _coreSettingsUpdatedAt != null) {
+      final d = DateTime.now().difference(_coreSettingsUpdatedAt!);
+      if (d < const Duration(seconds: 45)) return;
+    }
     try {
       final s = await widget.client.settings();
       if (!mounted) return;
@@ -383,10 +471,44 @@ class TodayScreenState extends State<TodayScreen> {
         _reviewMinSeconds = s.reviewMinSeconds;
         _reviewRepeatMinutes = s.reviewNotifyRepeatMinutes;
         _reviewNotifyWhenPaused = s.reviewNotifyWhenPaused;
+        _coreSettingsUpdatedAt = DateTime.now();
       });
     } catch (_) {
       // best effort
     }
+  }
+
+  bool _isTransientError(String msg) {
+    final s = msg.toLowerCase();
+    if (s.contains("health_failed")) return true;
+    if (s.contains("connection") || s.contains("socket")) return true;
+    if (s.contains("refused") ||
+        s.contains("timed out") ||
+        s.contains("timeout")) {
+      return true;
+    }
+    if (s.contains("http_502") ||
+        s.contains("http_503") ||
+        s.contains("http_504")) {
+      return true;
+    }
+    return false;
+  }
+
+  void _scheduleAutoRetryIfNeeded(String msg) {
+    if (!mounted) return;
+    if (_autoRetryTimer != null) return;
+    if (!_serverLooksLikeLocalhost()) return;
+    if (!_isTransientError(msg)) return;
+    if (_autoRetryAttempts >= 9) return;
+
+    final backoffMs = (350 * (1 << _autoRetryAttempts)).clamp(350, 5000);
+    _autoRetryAttempts += 1;
+    _autoRetryTimer = Timer(Duration(milliseconds: backoffMs), () {
+      _autoRetryTimer = null;
+      if (!mounted) return;
+      refresh(silent: true, triggerReminder: false);
+    });
   }
 
   int _blockLengthSecondsSafe() {
@@ -944,6 +1066,10 @@ class TodayScreenState extends State<TodayScreen> {
     try {
       final snap = await widget.client.now();
       final latestAnyId = snap.latestEventId;
+      final shouldUpdate =
+          latestAnyId != _lastAnyEventId || _nowUpdatedAt == null;
+      if (!shouldUpdate) return;
+
       final latestAnyAgeSeconds = snap.latestEventAgeSeconds;
       final focusTtlSeconds = snap.focusTtlSeconds;
       final audioTtlSeconds = snap.audioTtlSeconds;
@@ -1010,7 +1136,7 @@ class TodayScreenState extends State<TodayScreen> {
       });
     }
     try {
-      await _loadCoreSettings();
+      unawaited(_loadCoreSettings());
 
       if (!silent) {
         final ok = await widget.client.waitUntilHealthy(
@@ -1045,17 +1171,17 @@ class TodayScreenState extends State<TodayScreen> {
         _blocks = blocks;
         _dueBlock = due;
         _blocksUpdatedAt = DateTime.now();
+        _error = null;
       });
+      _autoRetryAttempts = 0;
       if (triggerReminder && viewingToday && due != null) {
         await _maybePromptDueBlock(due);
       }
     } catch (e) {
       if (!mounted) return;
-      if (!silent) {
-        setState(() {
-          _error = e.toString();
-        });
-      }
+      final msg = e.toString();
+      if (!silent) setState(() => _error = msg);
+      _scheduleAutoRetryIfNeeded(msg);
     } finally {
       if (!silent && mounted) {
         setState(() {
@@ -1075,11 +1201,12 @@ class TodayScreenState extends State<TodayScreen> {
       });
     }
     final viewingToday = _viewingToday();
-    if (viewingToday) {
-      await _refreshNow(silent: true);
-    }
-    await _refreshBlocks(
-        silent: silent, triggerReminder: triggerReminder && viewingToday);
+    final futures = <Future<void>>[
+      _refreshBlocks(
+          silent: silent, triggerReminder: triggerReminder && viewingToday),
+      if (viewingToday) _refreshNow(silent: true),
+    ];
+    await Future.wait(futures);
   }
 
   String _ageText(String rfc3339) {
@@ -1262,7 +1389,7 @@ class TodayScreenState extends State<TodayScreen> {
       );
 
       if (tooltip == null || tooltip.trim().isEmpty) return tile;
-      return Tooltip(message: tooltip, child: tile);
+      return RecorderTooltip(message: tooltip, child: tile);
     }
 
     return Card(
@@ -2410,7 +2537,6 @@ class TodayScreenState extends State<TodayScreen> {
     final canScrollH = _timelineZoom > 1.01;
 
     return Card(
-      key: widget.tutorialTimelineKey,
       child: Padding(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         child: Column(
@@ -2455,7 +2581,7 @@ class TodayScreenState extends State<TodayScreen> {
                     icon: const Icon(Icons.undo, size: 18),
                     label: const Text("Back"),
                   ),
-                Tooltip(
+                RecorderTooltip(
                   message: "Zoom out",
                   child: IconButton(
                     onPressed: _timelineZoom <= 1.01 ? null : _timelineZoomOut,
@@ -2468,7 +2594,7 @@ class TodayScreenState extends State<TodayScreen> {
                       : _timelineResetView,
                   child: Text("x${_timelineZoom.toStringAsFixed(1)}"),
                 ),
-                Tooltip(
+                RecorderTooltip(
                   message: "Zoom in",
                   child: IconButton(
                     onPressed: _timelineZoom >= 3.99 ? null : _timelineZoomIn,
@@ -2490,6 +2616,7 @@ class TodayScreenState extends State<TodayScreen> {
             ),
             const SizedBox(height: RecorderTokens.space2),
             Listener(
+              key: widget.tutorialTimelineKey,
               onPointerSignal: (e) {
                 if (e is! PointerScrollEvent) return;
                 if (!HardwareKeyboard.instance.isControlPressed) return;
@@ -2880,6 +3007,7 @@ class TodayScreenState extends State<TodayScreen> {
       onRefresh: () => refresh(triggerReminder: viewingToday),
       child: isWide
           ? ListView(
+              controller: _scrollV,
               padding: const EdgeInsets.all(RecorderTokens.space4),
               children: [
                 Row(
@@ -2929,6 +3057,7 @@ class TodayScreenState extends State<TodayScreen> {
               ],
             )
           : ListView.separated(
+              controller: _scrollV,
               padding: const EdgeInsets.all(RecorderTokens.space4),
               itemCount: 1 +
                   1 +

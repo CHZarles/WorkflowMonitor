@@ -82,7 +82,7 @@ class _IoUpdateManager implements UpdateManager {
       final raw = await f.readAsString();
       final obj = jsonDecode(raw);
       if (obj is! Map) return null;
-      final map = obj as Map;
+      final map = obj;
 
       Map? core;
       if (map["core"] is Map) core = map["core"] as Map;
@@ -194,7 +194,8 @@ class _IoUpdateManager implements UpdateManager {
     return 0;
   }
 
-  Future<UpdateRelease?> _fetchLatestRelease(String repo, {required String assetSuffix}) async {
+  Future<UpdateRelease?> _fetchLatestRelease(String repo,
+      {required String assetSuffix}) async {
     final uri = _latestReleaseApi(repo);
     final res = await http.get(uri, headers: {
       "Accept": "application/vnd.github+json",
@@ -212,7 +213,8 @@ class _IoUpdateManager implements UpdateManager {
 
     final assets = (obj["assets"] is List) ? (obj["assets"] as List) : const [];
     Map? best;
-    final suffix = assetSuffix.trim().isEmpty ? "-windows.zip" : assetSuffix.trim();
+    final suffix =
+        assetSuffix.trim().isEmpty ? "-windows.zip" : assetSuffix.trim();
     final suffixLower = suffix.toLowerCase();
     for (final a in assets) {
       if (a is! Map) continue;
@@ -223,30 +225,39 @@ class _IoUpdateManager implements UpdateManager {
     }
 
     final assetName = best == null ? null : (best["name"] ?? "").toString();
-    final assetUrl = best == null ? null : (best["browser_download_url"] ?? "").toString();
+    final assetUrl =
+        best == null ? null : (best["browser_download_url"] ?? "").toString();
     final size = best == null ? null : _int(best, "size");
 
     return UpdateRelease(
       tag: tag,
-      name: (obj["name"] ?? "").toString().trim().isEmpty ? null : (obj["name"] ?? "").toString().trim(),
-      publishedAt: (obj["published_at"] ?? "").toString().trim().isEmpty ? null : (obj["published_at"] ?? "").toString().trim(),
+      name: (obj["name"] ?? "").toString().trim().isEmpty
+          ? null
+          : (obj["name"] ?? "").toString().trim(),
+      publishedAt: (obj["published_at"] ?? "").toString().trim().isEmpty
+          ? null
+          : (obj["published_at"] ?? "").toString().trim(),
       body: (obj["body"] ?? "").toString(),
       assetName: assetName?.trim().isEmpty == true ? null : assetName,
       assetUrl: assetUrl?.trim().isEmpty == true ? null : assetUrl,
       assetSizeBytes: size,
-      htmlUrl: (obj["html_url"] ?? "").toString().trim().isEmpty ? null : (obj["html_url"] ?? "").toString().trim(),
+      htmlUrl: (obj["html_url"] ?? "").toString().trim().isEmpty
+          ? null
+          : (obj["html_url"] ?? "").toString().trim(),
     );
   }
 
   @override
   Future<UpdateCheckResult> checkLatest({required String gitHubRepo}) async {
     if (!isAvailable) {
-      return const UpdateCheckResult(ok: false, error: "not_supported", updateAvailable: false);
+      return const UpdateCheckResult(
+          ok: false, error: "not_supported", updateAvailable: false);
     }
 
     final repo = gitHubRepo.trim();
     if (repo.isEmpty) {
-      return const UpdateCheckResult(ok: false, error: "missing_repo", updateAvailable: false);
+      return const UpdateCheckResult(
+          ok: false, error: "missing_repo", updateAvailable: false);
     }
 
     try {
@@ -267,7 +278,8 @@ class _IoUpdateManager implements UpdateManager {
         updateAvailable: updateAvailable,
       );
     } catch (e) {
-      return UpdateCheckResult(ok: false, error: e.toString(), updateAvailable: false);
+      return UpdateCheckResult(
+          ok: false, error: e.toString(), updateAvailable: false);
     }
   }
 
@@ -377,10 +389,12 @@ try {
     required String installZipUrl,
     bool startMinimized = false,
   }) async {
-    if (!isAvailable) return const UpdateInstallResult(ok: false, error: "not_supported");
+    if (!isAvailable)
+      return const UpdateInstallResult(ok: false, error: "not_supported");
 
     final dir = _appDir();
-    if (dir == null) return const UpdateInstallResult(ok: false, error: "no_app_dir");
+    if (dir == null)
+      return const UpdateInstallResult(ok: false, error: "no_app_dir");
 
     if (!_looksLikePackagedInstall(dir)) {
       return const UpdateInstallResult(ok: false, error: "packaged_only");
@@ -388,7 +402,8 @@ try {
 
     final canWrite = await _canWriteToDir(dir);
     if (!canWrite) {
-      return const UpdateInstallResult(ok: false, error: "install_dir_not_writable");
+      return const UpdateInstallResult(
+          ok: false, error: "install_dir_not_writable");
     }
 
     Uri url;
@@ -400,7 +415,8 @@ try {
 
     try {
       final zip = await _downloadToTempFile(url);
-      final scriptFile = File(_join(Directory.systemTemp.path, "RecorderPhone-update.ps1"));
+      final scriptFile =
+          File(_join(Directory.systemTemp.path, "RecorderPhone-update.ps1"));
       await scriptFile.writeAsString(_updaterScript(), flush: true);
 
       final exePath = Platform.resolvedExecutable;

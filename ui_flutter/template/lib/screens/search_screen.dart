@@ -32,7 +32,7 @@ class SearchScreenState extends State<SearchScreen> {
 
   _BlockStatusFilter _statusFilter = _BlockStatusFilter.all;
 
-  bool _loading = true;
+  bool _loading = false;
   bool _refreshing = false;
   Completer<void>? _loadCompleter;
   String? _error;
@@ -48,9 +48,7 @@ class SearchScreenState extends State<SearchScreen> {
   void initState() {
     super.initState();
     if (widget.isActive) {
-      _load();
-    } else {
-      _loading = false;
+      _load(silent: true);
     }
   }
 
@@ -75,7 +73,7 @@ class SearchScreenState extends State<SearchScreen> {
       return;
     }
     if (!oldWidget.isActive && widget.isActive) {
-      _load();
+      _load(silent: true);
     }
   }
 
@@ -168,6 +166,7 @@ class SearchScreenState extends State<SearchScreen> {
       );
       if (!ok) {
         if (showLoadingUi) throw Exception("health_failed");
+        _scheduleAutoRetryIfNeeded("health_failed");
         return;
       }
 
@@ -202,11 +201,9 @@ class SearchScreenState extends State<SearchScreen> {
       _autoRetryAttempts = 0;
     } catch (e) {
       if (!mounted) return;
-      if (showLoadingUi) {
-        final msg = e.toString();
-        setState(() => _error = msg);
-        _scheduleAutoRetryIfNeeded(msg);
-      }
+      final msg = e.toString();
+      if (showLoadingUi) setState(() => _error = msg);
+      _scheduleAutoRetryIfNeeded(msg);
     } finally {
       if (showLoadingUi && mounted) {
         setState(() => _loading = false);

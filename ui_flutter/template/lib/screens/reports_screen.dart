@@ -6,6 +6,7 @@ import "package:flutter/services.dart";
 import "../api/core_client.dart";
 import "../theme/tokens.dart";
 import "../utils/desktop_agent.dart";
+import "../widgets/recorder_tooltip.dart";
 
 enum _ReportKindFilter { daily, weekly }
 
@@ -28,7 +29,7 @@ class ReportsScreen extends StatefulWidget {
 }
 
 class ReportsScreenState extends State<ReportsScreen> {
-  bool _loading = true;
+  bool _loading = false;
   String? _error;
   List<ReportSummary> _reports = const [];
 
@@ -77,9 +78,7 @@ class ReportsScreenState extends State<ReportsScreen> {
     _weeklyPrompt = TextEditingController();
     _outputDir = TextEditingController();
     if (widget.isActive) {
-      refresh();
-    } else {
-      _loading = false;
+      refresh(silent: true);
     }
   }
 
@@ -103,7 +102,7 @@ class ReportsScreenState extends State<ReportsScreen> {
       return;
     }
     if (!oldWidget.isActive && widget.isActive) {
-      refresh();
+      refresh(silent: true);
     }
   }
 
@@ -132,7 +131,10 @@ class ReportsScreenState extends State<ReportsScreen> {
     final uri = Uri.tryParse(widget.serverUrl.trim());
     if (uri == null) return false;
     final host = uri.host.trim().toLowerCase();
-    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+    return host == "127.0.0.1" ||
+        host == "localhost" ||
+        host == "0.0.0.0" ||
+        host == "::1";
   }
 
   Future<void> _restartAgent() async {
@@ -186,7 +188,8 @@ class ReportsScreenState extends State<ReportsScreen> {
     if (_apiKey.text != s.apiKey) _apiKey.text = s.apiKey;
     if (_model.text != s.model) _model.text = s.model;
     if (_dailyPrompt.text != s.dailyPrompt) _dailyPrompt.text = s.dailyPrompt;
-    if (_weeklyPrompt.text != s.weeklyPrompt) _weeklyPrompt.text = s.weeklyPrompt;
+    if (_weeklyPrompt.text != s.weeklyPrompt)
+      _weeklyPrompt.text = s.weeklyPrompt;
     final outDir = s.outputDir ?? "";
     if (_outputDir.text != outDir) _outputDir.text = outDir;
   }
@@ -278,7 +281,8 @@ class ReportsScreenState extends State<ReportsScreen> {
 
   Future<void> refresh({bool silent = false}) async {
     if (!widget.isActive && !silent) return;
-    if (!silent) {
+    final showLoadingUi = !silent || _error != null;
+    if (showLoadingUi) {
       setState(() {
         _loading = true;
         _error = null;
@@ -287,13 +291,17 @@ class ReportsScreenState extends State<ReportsScreen> {
 
     try {
       final ok = await widget.client.waitUntilHealthy(
-        timeout: silent
-            ? const Duration(milliseconds: 900)
-            : (_serverLooksLikeLocalhost()
+        timeout: showLoadingUi
+            ? (_serverLooksLikeLocalhost()
                 ? const Duration(seconds: 15)
-                : const Duration(seconds: 6)),
+                : const Duration(seconds: 6))
+            : const Duration(milliseconds: 900),
       );
-      if (!ok) throw Exception("health_failed");
+      if (!ok) {
+        if (showLoadingUi) throw Exception("health_failed");
+        _scheduleAutoRetryIfNeeded("health_failed");
+        return;
+      }
 
       final settingsFuture = widget.client.reportSettings();
       final listFuture = widget.client.reports(limit: 200);
@@ -312,10 +320,10 @@ class ReportsScreenState extends State<ReportsScreen> {
     } catch (e) {
       if (!mounted) return;
       final msg = e.toString();
-      setState(() => _error = msg);
+      if (showLoadingUi) setState(() => _error = msg);
       _scheduleAutoRetryIfNeeded(msg);
     } finally {
-      if (mounted && !silent) setState(() => _loading = false);
+      if (mounted && showLoadingUi) setState(() => _loading = false);
     }
   }
 
@@ -323,8 +331,12 @@ class ReportsScreenState extends State<ReportsScreen> {
     final s = msg.toLowerCase();
     if (s.contains("health_failed")) return true;
     if (s.contains("connection") || s.contains("socket")) return true;
-    if (s.contains("refused") || s.contains("timed out") || s.contains("timeout")) return true;
-    if (s.contains("http_502") || s.contains("http_503") || s.contains("http_504")) return true;
+    if (s.contains("refused") ||
+        s.contains("timed out") ||
+        s.contains("timeout")) return true;
+    if (s.contains("http_502") ||
+        s.contains("http_503") ||
+        s.contains("http_504")) return true;
     return false;
   }
 
@@ -393,7 +405,8 @@ class ReportsScreenState extends State<ReportsScreen> {
     if (s == null || !s.isConfigured) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("LLM reports are not configured. Enable it and set provider/model/key first."),
+          content: Text(
+              "LLM reports are not configured. Enable it and set provider/model/key first."),
         ),
       );
       return;
@@ -414,7 +427,8 @@ class ReportsScreenState extends State<ReportsScreen> {
       await refresh(silent: true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Generate failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Generate failed: $e")));
     } finally {
       if (mounted) setState(() => _generating = false);
     }
@@ -427,7 +441,8 @@ class ReportsScreenState extends State<ReportsScreen> {
     if (s == null || !s.isConfigured) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("LLM reports are not configured. Enable it and set provider/model/key first."),
+          content: Text(
+              "LLM reports are not configured. Enable it and set provider/model/key first."),
         ),
       );
       return;
@@ -451,7 +466,8 @@ class ReportsScreenState extends State<ReportsScreen> {
       await refresh(silent: true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Generate failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Generate failed: $e")));
     } finally {
       if (mounted) setState(() => _generating = false);
     }
@@ -502,7 +518,8 @@ class ReportsScreenState extends State<ReportsScreen> {
             ? "Enabled (needs setup)"
             : "Off";
 
-    final modelLine = _model.text.trim().isEmpty ? "" : "Model: ${_model.text.trim()}\n";
+    final modelLine =
+        _model.text.trim().isEmpty ? "" : "Model: ${_model.text.trim()}\n";
     final statusBody = configured
         ? "${modelLine}$dailyLabel\n$weeklyLabel"
         : "Connect a provider to enable daily/weekly auto reports (Core runs automation even if UI is closed).\n$dailyLabel\n$weeklyLabel";
@@ -519,7 +536,9 @@ class ReportsScreenState extends State<ReportsScreen> {
           children: [
             Row(
               children: [
-                Expanded(child: Text("Reports", style: Theme.of(context).textTheme.titleMedium)),
+                Expanded(
+                    child: Text("Reports",
+                        style: Theme.of(context).textTheme.titleMedium)),
                 if (widget.onOpenSettings != null)
                   TextButton.icon(
                     onPressed: widget.onOpenSettings,
@@ -533,7 +552,8 @@ class ReportsScreenState extends State<ReportsScreen> {
               decoration: BoxDecoration(
                 color: scheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
-                border: Border.all(color: scheme.outline.withValues(alpha: 0.10)),
+                border:
+                    Border.all(color: scheme.outline.withValues(alpha: 0.10)),
               ),
               padding: const EdgeInsets.all(RecorderTokens.space3),
               child: Row(
@@ -553,12 +573,15 @@ class ReportsScreenState extends State<ReportsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(statusTitle, style: Theme.of(context).textTheme.labelLarge),
+                        Text(statusTitle,
+                            style: Theme.of(context).textTheme.labelLarge),
                         const SizedBox(height: 4),
-                        Text(statusBody, style: Theme.of(context).textTheme.labelMedium),
+                        Text(statusBody,
+                            style: Theme.of(context).textTheme.labelMedium),
                         if (outputDirLine != null) ...[
                           const SizedBox(height: 6),
-                          Text(outputDirLine, style: Theme.of(context).textTheme.labelMedium),
+                          Text(outputDirLine,
+                              style: Theme.of(context).textTheme.labelMedium),
                         ],
                       ],
                     ),
@@ -593,7 +616,8 @@ class ReportsScreenState extends State<ReportsScreen> {
                   onPressed: !configured || _generating
                       ? null
                       : () async {
-                          final base = _normalizeDay(DateTime.now().subtract(const Duration(days: 7)));
+                          final base = _normalizeDay(
+                              DateTime.now().subtract(const Duration(days: 7)));
                           final picked = await showDatePicker(
                             context: context,
                             initialDate: base,
@@ -615,14 +639,17 @@ class ReportsScreenState extends State<ReportsScreen> {
               title: const Text("Report settings"),
               subtitle: Text(
                 _enabled
-                    ? (configured ? "Enabled · ${_model.text.trim()}" : "Enabled but not configured")
+                    ? (configured
+                        ? "Enabled · ${_model.text.trim()}"
+                        : "Enabled but not configured")
                     : "Off",
               ),
               children: [
                 const SizedBox(height: RecorderTokens.space2),
                 SwitchListTile(
                   title: const Text("Enable LLM reports"),
-                  subtitle: const Text("Core runs auto-generation while it is running (UI can be closed)."),
+                  subtitle: const Text(
+                      "Core runs auto-generation while it is running (UI can be closed)."),
                   value: _enabled,
                   onChanged: (v) {
                     setState(() => _enabled = v);
@@ -646,8 +673,11 @@ class ReportsScreenState extends State<ReportsScreen> {
                     labelText: "API key",
                     suffixIcon: IconButton(
                       tooltip: _apiKeyObscure ? "Show" : "Hide",
-                      onPressed: () => setState(() => _apiKeyObscure = !_apiKeyObscure),
-                      icon: Icon(_apiKeyObscure ? Icons.visibility : Icons.visibility_off),
+                      onPressed: () =>
+                          setState(() => _apiKeyObscure = !_apiKeyObscure),
+                      icon: Icon(_apiKeyObscure
+                          ? Icons.visibility
+                          : Icons.visibility_off),
                     ),
                   ),
                   onChanged: (_) => _scheduleSave(),
@@ -666,7 +696,9 @@ class ReportsScreenState extends State<ReportsScreen> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text("Daily schedule"),
                   subtitle: Text(
-                    _dailyEnabled ? "At ${_hhmmFromMinutes(_dailyAtMinutes)} (yesterday)" : "OFF",
+                    _dailyEnabled
+                        ? "At ${_hhmmFromMinutes(_dailyAtMinutes)} (yesterday)"
+                        : "OFF",
                   ),
                   trailing: Switch(
                     value: _dailyEnabled,
@@ -684,7 +716,8 @@ class ReportsScreenState extends State<ReportsScreen> {
                       ),
                     );
                     if (picked == null) return;
-                    final minutes = (picked.hour * 60 + picked.minute).clamp(0, 1439);
+                    final minutes =
+                        (picked.hour * 60 + picked.minute).clamp(0, 1439);
                     setState(() {
                       _dailyAtMinutes = minutes;
                       _dailyEnabled = true;
@@ -716,7 +749,8 @@ class ReportsScreenState extends State<ReportsScreen> {
                       ),
                     );
                     if (picked == null) return;
-                    final minutes = (picked.hour * 60 + picked.minute).clamp(0, 1439);
+                    final minutes =
+                        (picked.hour * 60 + picked.minute).clamp(0, 1439);
                     setState(() {
                       _weeklyAtMinutes = minutes;
                       _weeklyEnabled = true;
@@ -735,18 +769,26 @@ class ReportsScreenState extends State<ReportsScreen> {
                           isDense: true,
                         ),
                         items: const [
-                          DropdownMenuItem(value: DateTime.monday, child: Text("Mon")),
-                          DropdownMenuItem(value: DateTime.tuesday, child: Text("Tue")),
-                          DropdownMenuItem(value: DateTime.wednesday, child: Text("Wed")),
-                          DropdownMenuItem(value: DateTime.thursday, child: Text("Thu")),
-                          DropdownMenuItem(value: DateTime.friday, child: Text("Fri")),
-                          DropdownMenuItem(value: DateTime.saturday, child: Text("Sat")),
-                          DropdownMenuItem(value: DateTime.sunday, child: Text("Sun")),
+                          DropdownMenuItem(
+                              value: DateTime.monday, child: Text("Mon")),
+                          DropdownMenuItem(
+                              value: DateTime.tuesday, child: Text("Tue")),
+                          DropdownMenuItem(
+                              value: DateTime.wednesday, child: Text("Wed")),
+                          DropdownMenuItem(
+                              value: DateTime.thursday, child: Text("Thu")),
+                          DropdownMenuItem(
+                              value: DateTime.friday, child: Text("Fri")),
+                          DropdownMenuItem(
+                              value: DateTime.saturday, child: Text("Sat")),
+                          DropdownMenuItem(
+                              value: DateTime.sunday, child: Text("Sun")),
                         ],
                         onChanged: (v) {
                           if (v == null) return;
                           setState(() => _weeklyWeekday = v);
-                          _scheduleSave(delay: const Duration(milliseconds: 200));
+                          _scheduleSave(
+                              delay: const Duration(milliseconds: 200));
                         },
                       ),
                     ),
@@ -757,7 +799,9 @@ class ReportsScreenState extends State<ReportsScreen> {
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: EdgeInsets.zero,
                   title: const Text("Storage"),
-                  subtitle: Text(_effectiveOutputDir == null ? "Default path" : "Output folder configured"),
+                  subtitle: Text(_effectiveOutputDir == null
+                      ? "Default path"
+                      : "Output folder configured"),
                   children: [
                     SwitchListTile(
                       title: const Text("Save Markdown (.md)"),
@@ -789,7 +833,8 @@ class ReportsScreenState extends State<ReportsScreen> {
                     const SizedBox(height: RecorderTokens.space2),
                     Row(
                       children: [
-                        Icon(Icons.info_outline, size: 16, color: scheme.onSurfaceVariant),
+                        Icon(Icons.info_outline,
+                            size: 16, color: scheme.onSurfaceVariant),
                         const SizedBox(width: RecorderTokens.space2),
                         Expanded(
                           child: Text(
@@ -822,7 +867,8 @@ class ReportsScreenState extends State<ReportsScreen> {
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: EdgeInsets.zero,
                   title: const Text("Prompts (advanced)"),
-                  subtitle: const Text("Customize the Markdown table templates."),
+                  subtitle:
+                      const Text("Customize the Markdown table templates."),
                   children: [
                     const SizedBox(height: RecorderTokens.space2),
                     TextField(
@@ -858,7 +904,8 @@ class ReportsScreenState extends State<ReportsScreen> {
                             _dailyPrompt.text = d;
                             _weeklyPrompt.text = w;
                           });
-                          _scheduleSave(delay: const Duration(milliseconds: 200));
+                          _scheduleSave(
+                              delay: const Duration(milliseconds: 200));
                         },
                         icon: const Icon(Icons.restore, size: 18),
                         label: const Text("Reset prompts to default"),
@@ -877,7 +924,9 @@ class ReportsScreenState extends State<ReportsScreen> {
                       )
                     else
                       Icon(
-                        _saveError == null ? Icons.check_circle_outline : Icons.error_outline,
+                        _saveError == null
+                            ? Icons.check_circle_outline
+                            : Icons.error_outline,
                         size: 16,
                         color: _saveError == null
                             ? Theme.of(context).colorScheme.onSurfaceVariant
@@ -900,10 +949,12 @@ class ReportsScreenState extends State<ReportsScreen> {
                   const SizedBox(height: RecorderTokens.space2),
                   Row(
                     children: [
-                      Icon(Icons.info_outline, size: 16, color: scheme.onSurfaceVariant),
+                      Icon(Icons.info_outline,
+                          size: 16, color: scheme.onSurfaceVariant),
                       const SizedBox(width: RecorderTokens.space2),
                       const Expanded(
-                        child: Text("Need tab titles / app details? Enable Privacy L2/L3 in Core settings."),
+                        child: Text(
+                            "Need tab titles / app details? Enable Privacy L2/L3 in Core settings."),
                       ),
                     ],
                   ),
@@ -923,15 +974,18 @@ class ReportsScreenState extends State<ReportsScreen> {
       final msg = _error ?? "";
       final auto = _serverLooksLikeLocalhost() && _isTransientError(msg);
       final is404 = msg.contains("http_404");
-      final canRestartAgent = _serverLooksLikeLocalhost() && DesktopAgent.instance.isAvailable;
+      final canRestartAgent =
+          _serverLooksLikeLocalhost() && DesktopAgent.instance.isAvailable;
       return Padding(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Reports unavailable", style: Theme.of(context).textTheme.titleMedium),
+            Text("Reports unavailable",
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: RecorderTokens.space2),
-            Text("Server URL: ${widget.serverUrl}", style: Theme.of(context).textTheme.bodyMedium),
+            Text("Server URL: ${widget.serverUrl}",
+                style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: RecorderTokens.space2),
             Text("Error: $msg", style: Theme.of(context).textTheme.labelMedium),
             if (is404) ...[
@@ -984,7 +1038,8 @@ class ReportsScreenState extends State<ReportsScreen> {
       child: ListView.separated(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         itemCount: filtered.length + 2,
-        separatorBuilder: (_, __) => const SizedBox(height: RecorderTokens.space3),
+        separatorBuilder: (_, __) =>
+            const SizedBox(height: RecorderTokens.space3),
         itemBuilder: (context, i) {
           if (i == 0) return _configCard(context);
           if (i == 1) {
@@ -992,8 +1047,10 @@ class ReportsScreenState extends State<ReportsScreen> {
               alignment: Alignment.centerLeft,
               child: SegmentedButton<_ReportKindFilter>(
                 segments: const [
-                  ButtonSegment(value: _ReportKindFilter.daily, label: Text("Daily")),
-                  ButtonSegment(value: _ReportKindFilter.weekly, label: Text("Weekly")),
+                  ButtonSegment(
+                      value: _ReportKindFilter.daily, label: Text("Daily")),
+                  ButtonSegment(
+                      value: _ReportKindFilter.weekly, label: Text("Weekly")),
                 ],
                 selected: {_filter},
                 showSelectedIcon: false,
@@ -1002,8 +1059,11 @@ class ReportsScreenState extends State<ReportsScreen> {
             );
           }
           final s = filtered[i - 2];
-          final title = s.kind == "daily" ? s.periodStart : "${s.periodStart} ~ ${s.periodEnd}";
-          final subtitle = "Generated ${_ageText(DateTime.parse(s.generatedAt).toLocal())}"
+          final title = s.kind == "daily"
+              ? s.periodStart
+              : "${s.periodStart} ~ ${s.periodEnd}";
+          final subtitle =
+              "Generated ${_ageText(DateTime.parse(s.generatedAt).toLocal())}"
               "${s.model == null || s.model!.trim().isEmpty ? "" : " · ${s.model}"}";
 
           return ListTile(
@@ -1011,14 +1071,22 @@ class ReportsScreenState extends State<ReportsScreen> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
             ),
-            leading: Icon(s.kind == "daily" ? Icons.today_outlined : Icons.date_range_outlined),
+            leading: Icon(s.kind == "daily"
+                ? Icons.today_outlined
+                : Icons.date_range_outlined),
             title: Text(title),
             subtitle: Text(subtitle),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (s.hasError) const Tooltip(message: "Has error", child: Icon(Icons.error_outline, size: 18)),
-                if (s.hasOutput) const Tooltip(message: "Has output", child: Icon(Icons.article_outlined, size: 18)),
+                if (s.hasError)
+                  const RecorderTooltip(
+                      message: "Has error",
+                      child: Icon(Icons.error_outline, size: 18)),
+                if (s.hasOutput)
+                  const RecorderTooltip(
+                      message: "Has output",
+                      child: Icon(Icons.article_outlined, size: 18)),
               ],
             ),
             onTap: () => _openReport(s),
@@ -1064,7 +1132,8 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
       _error = null;
     });
     try {
-      final ok = await widget.client.waitUntilHealthy(timeout: const Duration(seconds: 6));
+      final ok = await widget.client
+          .waitUntilHealthy(timeout: const Duration(seconds: 6));
       if (!ok) throw Exception("health_failed");
       final r = await widget.client.reportById(widget.summary.id);
       if (!mounted) return;
@@ -1080,7 +1149,8 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
   Future<void> _copy(String text) async {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Copied")));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text("Copied")));
   }
 
   Future<void> _delete() async {
@@ -1106,7 +1176,8 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Delete failed: $e")));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1138,7 +1209,8 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
         padding: EdgeInsets.only(
           left: RecorderTokens.space4,
           right: RecorderTokens.space4,
-          bottom: RecorderTokens.space4 + MediaQuery.of(context).viewInsets.bottom,
+          bottom:
+              RecorderTokens.space4 + MediaQuery.of(context).viewInsets.bottom,
           top: RecorderTokens.space2,
         ),
         child: Column(
@@ -1180,9 +1252,13 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                       if (err.isNotEmpty) ...[
                         Row(
                           children: [
-                            Icon(Icons.warning_amber_rounded, size: 18, color: scheme.tertiary),
+                            Icon(Icons.warning_amber_rounded,
+                                size: 18, color: scheme.tertiary),
                             const SizedBox(width: RecorderTokens.space2),
-                            Expanded(child: Text(err, maxLines: 2, overflow: TextOverflow.ellipsis)),
+                            Expanded(
+                                child: Text(err,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis)),
                           ],
                         ),
                         const SizedBox(height: RecorderTokens.space2),
@@ -1192,16 +1268,19 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                         constraints: const BoxConstraints(maxHeight: 420),
                         decoration: BoxDecoration(
                           color: scheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
-                          border: Border.all(color: scheme.outline.withValues(alpha: 0.10)),
+                          borderRadius:
+                              BorderRadius.circular(RecorderTokens.radiusM),
+                          border: Border.all(
+                              color: scheme.outline.withValues(alpha: 0.10)),
                         ),
                         padding: const EdgeInsets.all(RecorderTokens.space3),
                         child: SingleChildScrollView(
                           child: SelectableText(
                             out.isEmpty ? "(No output)" : out,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  fontFamily: "monospace",
-                                ),
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      fontFamily: "monospace",
+                                    ),
                           ),
                         ),
                       ),

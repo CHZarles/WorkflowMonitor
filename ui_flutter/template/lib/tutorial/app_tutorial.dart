@@ -11,12 +11,16 @@ class TutorialStep {
     required this.body,
     this.targetKey,
     this.beforeShow,
+    this.targetHint,
+    this.allowInteraction = false,
   });
 
   final String title;
   final String body;
   final GlobalKey? targetKey;
   final Future<void> Function()? beforeShow;
+  final String? targetHint;
+  final bool allowInteraction;
 }
 
 class TutorialRunner {
@@ -122,6 +126,8 @@ class _TutorialOverlayState extends State<TutorialOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulse;
   Rect? _target;
+  Timer? _resolveTimer;
+  int _resolveAttempts = 0;
 
   @override
   void initState() {
@@ -130,7 +136,7 @@ class _TutorialOverlayState extends State<TutorialOverlay>
       vsync: this,
       duration: const Duration(milliseconds: 1100),
     )..repeat(reverse: true);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _updateTarget());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startResolve());
   }
 
   @override
@@ -138,12 +144,13 @@ class _TutorialOverlayState extends State<TutorialOverlay>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.step.targetKey != widget.step.targetKey ||
         oldWidget.index != widget.index) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _updateTarget());
+      WidgetsBinding.instance.addPostFrameCallback((_) => _startResolve());
     }
   }
 
   @override
   void dispose() {
+    _resolveTimer?.cancel();
     _pulse.dispose();
     super.dispose();
   }
@@ -158,45 +165,132 @@ class _TutorialOverlayState extends State<TutorialOverlay>
     return topLeft & ro.size;
   }
 
+  void _startResolve() {
+    _resolveTimer?.cancel();
+    _resolveAttempts = 0;
+    _updateTarget();
+  }
+
   void _updateTarget() {
     final key = widget.step.targetKey;
     final next = key == null ? null : _resolveRect(key);
     if (!mounted) return;
-    setState(() => _target = next);
+    if (next != _target) {
+      setState(() => _target = next);
+    }
+
+    // If the target hasn't been laid out yet, retry a few times.
+    if (next == null && key != null && _resolveAttempts < 24) {
+      _resolveAttempts += 1;
+      _resolveTimer?.cancel();
+      _resolveTimer = Timer(const Duration(milliseconds: 120), () {
+        if (!mounted) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _updateTarget());
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final safe = MediaQuery.of(context).padding;
     final scheme = Theme.of(context).colorScheme;
+    final size = MediaQuery.of(context).size;
 
     final hole = _target == null
         ? null
-        : _target!
-            .inflate(10)
-            .intersect(Offset.zero & MediaQuery.of(context).size);
+        : _target!.inflate(10).intersect(Offset.zero & size);
+
+    final canTapTarget = hole != null && widget.step.allowInteraction;
 
     final progress = "${widget.index + 1}/${widget.total}";
+    final placeCardTop = hole != null && hole.center.dy >= size.height * 0.58;
+
+    final hint = (widget.step.targetHint ?? "").trim();
 
     return Material(
       color: Colors.transparent,
       child: Stack(
         children: [
           Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {},
+            child: IgnorePointer(
               child: AnimatedBuilder(
                 animation: _pulse,
                 builder: (_, __) => CustomPaint(
                   painter: _TutorialScrimPainter(
                     hole: hole,
                     holeRadius: 14,
-                    scrimColor: Colors.black.withValues(alpha: 0.55),
+                    scrimColor: const Color(0x4A000000),
                     borderColor: scheme.primary.withValues(
                       alpha: 0.55 + 0.35 * _pulse.value,
                     ),
                     borderWidth: 2 + 1.5 * _pulse.value,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: _TutorialBarrier(
+              hole: hole,
+              allowHoleTapThrough: canTapTarget,
+            ),
+          ),
+          if (hole != null)
+            Positioned(
+              left: hole.center.dx - 10,
+              top: hole.center.dy - 10,
+              child: IgnorePointer(
+                child: AnimatedBuilder(
+                  animation: _pulse,
+                  builder: (_, __) {
+                    final t = _pulse.value;
+                    return Opacity(
+                      opacity: 0.35 + 0.35 * (1 - t),
+                      child: Container(
+                        width: 20 + 10 * t,
+                        height: 20 + 10 * t,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: scheme.primary.withValues(alpha: 0.85),
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          Positioned.fill(
+            child: SafeArea(
+              top: true,
+              bottom: true,
+              child: Align(
+                alignment:
+                    placeCardTop ? Alignment.topCenter : Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.all(RecorderTokens.space4),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 680),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      switchInCurve: Curves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      child: _TutorialCard(
+                        key: ValueKey(widget.index),
+                        title: widget.step.title,
+                        body: widget.step.body,
+                        progress: progress,
+                        showBack: widget.index > 0,
+                        isLast: widget.index == widget.total - 1,
+                        canTapTarget: canTapTarget,
+                        hint: hint.isEmpty ? null : hint,
+                        onBack: widget.onBack,
+                        onNext: widget.onNext,
+                        onClose: widget.onClose,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -212,59 +306,69 @@ class _TutorialOverlayState extends State<TutorialOverlay>
               color: Colors.white.withValues(alpha: 0.9),
             ),
           ),
-          Positioned(
-            left: RecorderTokens.space4,
-            right: RecorderTokens.space4,
-            bottom: safe.bottom + RecorderTokens.space4,
-            child: SafeArea(
-              top: false,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 180),
-                switchInCurve: Curves.easeOut,
-                switchOutCurve: Curves.easeIn,
-                child: _TutorialCard(
-                  key: ValueKey(widget.index),
-                  title: widget.step.title,
-                  body: widget.step.body,
-                  progress: progress,
-                  showBack: widget.index > 0,
-                  isLast: widget.index == widget.total - 1,
-                  onBack: widget.onBack,
-                  onNext: widget.onNext,
-                  onClose: widget.onClose,
-                ),
-              ),
-            ),
-          ),
-          if (hole != null)
-            Positioned(
-              left: max(RecorderTokens.space4, hole.left),
-              top: max(RecorderTokens.space4, hole.top - 26),
-              child: Material(
-                color: Colors.transparent,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: RecorderTokens.space2,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.65),
-                    borderRadius: BorderRadius.circular(999),
-                    border:
-                        Border.all(color: Colors.white.withValues(alpha: 0.25)),
-                  ),
-                  child: Text(
-                    "看这里",
-                    style: Theme.of(context)
-                        .textTheme
-                        .labelMedium
-                        ?.copyWith(color: Colors.white),
-                  ),
-                ),
-              ),
-            ),
         ],
       ),
+    );
+  }
+}
+
+class _TutorialBarrier extends StatelessWidget {
+  const _TutorialBarrier({
+    required this.hole,
+    required this.allowHoleTapThrough,
+  });
+
+  final Rect? hole;
+  final bool allowHoleTapThrough;
+
+  Widget _blocker() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {},
+      child: const SizedBox.expand(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (hole == null || !allowHoleTapThrough) {
+      return _blocker();
+    }
+
+    final size = MediaQuery.of(context).size;
+    final h = hole!;
+
+    final topH = h.top.clamp(0.0, size.height).toDouble();
+    final bottomTop = h.bottom.clamp(0.0, size.height).toDouble();
+    final leftW = h.left.clamp(0.0, size.width).toDouble();
+    final rightLeft = h.right.clamp(0.0, size.width).toDouble();
+
+    final holeHeight = h.height.clamp(0.0, size.height).toDouble();
+    final rightW = max(0.0, size.width - rightLeft).toDouble();
+
+    return Stack(
+      children: [
+        if (topH > 0)
+          Positioned(
+              left: 0, top: 0, right: 0, height: topH, child: _blocker()),
+        if (bottomTop < size.height)
+          Positioned(
+              left: 0, top: bottomTop, right: 0, bottom: 0, child: _blocker()),
+        if (leftW > 0 && holeHeight > 0)
+          Positioned(
+              left: 0,
+              top: topH,
+              width: leftW,
+              height: holeHeight,
+              child: _blocker()),
+        if (rightW > 0 && holeHeight > 0)
+          Positioned(
+              left: rightLeft,
+              top: topH,
+              width: rightW,
+              height: holeHeight,
+              child: _blocker()),
+      ],
     );
   }
 }
@@ -277,6 +381,8 @@ class _TutorialCard extends StatelessWidget {
     required this.progress,
     required this.showBack,
     required this.isLast,
+    required this.canTapTarget,
+    required this.hint,
     required this.onBack,
     required this.onNext,
     required this.onClose,
@@ -287,6 +393,8 @@ class _TutorialCard extends StatelessWidget {
   final String progress;
   final bool showBack;
   final bool isLast;
+  final bool canTapTarget;
+  final String? hint;
   final Future<void> Function() onBack;
   final Future<void> Function() onNext;
   final VoidCallback onClose;
@@ -294,6 +402,7 @@ class _TutorialCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final maxBodyH = max(120.0, MediaQuery.of(context).size.height * 0.28);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(RecorderTokens.space4),
@@ -316,7 +425,49 @@ class _TutorialCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: RecorderTokens.space2),
-            Text(body, style: Theme.of(context).textTheme.bodyMedium),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxBodyH),
+              child: SingleChildScrollView(
+                child:
+                    Text(body, style: Theme.of(context).textTheme.bodyMedium),
+              ),
+            ),
+            if (hint != null && hint!.trim().isNotEmpty) ...[
+              const SizedBox(height: RecorderTokens.space2),
+              Row(
+                children: [
+                  Icon(Icons.lightbulb_outline,
+                      size: 16, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: RecorderTokens.space1),
+                  Expanded(
+                    child: Text(
+                      hint!,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (canTapTarget) ...[
+              const SizedBox(height: RecorderTokens.space2),
+              Row(
+                children: [
+                  Icon(Icons.touch_app,
+                      size: 16, color: scheme.primary.withValues(alpha: 0.95)),
+                  const SizedBox(width: RecorderTokens.space1),
+                  Expanded(
+                    child: Text(
+                      "你可以直接点击高亮区域，看看会发生什么。",
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: RecorderTokens.space4),
             Row(
               children: [

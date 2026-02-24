@@ -1,3 +1,4 @@
+import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 
 import "tokens.dart";
@@ -47,6 +48,9 @@ class RecorderTheme {
           borderSide: BorderSide(color: RecorderLightColors.border0),
         ),
       ),
+      tooltipTheme: TooltipThemeData(
+        excludeFromSemantics: defaultTargetPlatform == TargetPlatform.windows,
+      ),
     );
   }
 
@@ -93,6 +97,9 @@ class RecorderTheme {
           borderRadius: BorderRadius.circular(RecorderTokens.radiusM),
           borderSide: BorderSide(color: RecorderDarkColors.border0),
         ),
+      ),
+      tooltipTheme: TooltipThemeData(
+        excludeFromSemantics: defaultTargetPlatform == TargetPlatform.windows,
       ),
     );
   }

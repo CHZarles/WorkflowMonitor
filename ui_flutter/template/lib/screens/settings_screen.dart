@@ -35,10 +35,10 @@ class SettingsScreen extends StatefulWidget {
   final GlobalKey? tutorialPrivacyKey;
 
   @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
+  State<SettingsScreen> createState() => SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class SettingsScreenState extends State<SettingsScreen> {
   static const _prefUpdateRepo = "updateGitHubRepo";
   static const _prefUpdateAutoCheck = "updateAutoCheck";
   static const _prefUpdateLastCheckIso = "updateLastCheckIso";
@@ -51,6 +51,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _ruleQuery;
   late final TextEditingController _updateRepo;
   _RuleFilter _ruleFilter = _RuleFilter.all;
+  final ScrollController _scrollV = ScrollController();
 
   bool _healthLoading = false;
   bool? _healthOk;
@@ -449,7 +450,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ruleQuery.dispose();
     _updateRepo.dispose();
     _updateRepoSaveDebounce?.cancel();
+    _scrollV.dispose();
     super.dispose();
+  }
+
+  Future<void> _scrollToTutorialKey(GlobalKey? key) async {
+    if (key == null) return;
+    for (var i = 0; i < 20; i++) {
+      if (_scrollV.hasClients) break;
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    if (!_scrollV.hasClients) return;
+
+    Future<void> ensureIfPossible() async {
+      final ctx = key.currentContext;
+      if (ctx == null) return;
+      try {
+        await Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.15,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await WidgetsBinding.instance.endOfFrame;
+      } catch (_) {
+        // best effort
+      }
+    }
+
+    await ensureIfPossible();
+    if (key.currentContext != null) return;
+
+    try {
+      _scrollV.jumpTo(0);
+    } catch (_) {
+      // ignore
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await WidgetsBinding.instance.endOfFrame;
+
+    for (var i = 0; i < 20; i++) {
+      await ensureIfPossible();
+      if (key.currentContext != null) return;
+      if (!_scrollV.hasClients) return;
+
+      final pos = _scrollV.position;
+      final step = (pos.viewportDimension * 0.85).clamp(180.0, 900.0);
+      final next =
+          (pos.pixels + step).clamp(0.0, pos.maxScrollExtent).toDouble();
+      if ((next - pos.pixels).abs() < 1) return;
+
+      try {
+        await _scrollV.animateTo(
+          next,
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOut,
+        );
+      } catch (_) {
+        return;
+      }
+      await WidgetsBinding.instance.endOfFrame;
+    }
+  }
+
+  Future<void> scrollToTutorialPrivacy() async {
+    await _scrollToTutorialKey(widget.tutorialPrivacyKey);
   }
 
   String _todayLocal() {
@@ -1202,6 +1269,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         : Theme.of(context).colorScheme.error;
 
     return ListView(
+      controller: _scrollV,
       padding: const EdgeInsets.all(RecorderTokens.space4),
       children: [
         Card(

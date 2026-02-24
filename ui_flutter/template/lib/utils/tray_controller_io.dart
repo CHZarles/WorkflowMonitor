@@ -33,7 +33,8 @@ class _IoTrayController with WindowListener implements TrayController {
   Future<void> Function()? _onQuickReview;
 
   Timer? _timer;
-  _TrayStatus _status = const _TrayStatus(coreHealthy: false, trackingLabel: "…");
+  _TrayStatus _status =
+      const _TrayStatus(coreHealthy: false, trackingLabel: "…");
 
   @override
   bool get isAvailable => !kIsWeb && Platform.isWindows;
@@ -47,7 +48,8 @@ class _IoTrayController with WindowListener implements TrayController {
   String _trayIconPath() {
     try {
       final exeDir = File(Platform.resolvedExecutable).parent.path;
-      final candidate = _join(_join(_join(exeDir, "data"), "flutter_assets"), "assets${Platform.pathSeparator}tray.ico");
+      final candidate = _join(_join(_join(exeDir, "data"), "flutter_assets"),
+          "assets${Platform.pathSeparator}tray.ico");
       if (File(candidate).existsSync()) return candidate;
     } catch (_) {
       // ignore
@@ -60,22 +62,25 @@ class _IoTrayController with WindowListener implements TrayController {
     final u = Uri.tryParse(url.trim());
     if (u == null) return false;
     final host = u.host.trim().toLowerCase();
-    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+    return host == "127.0.0.1" ||
+        host == "localhost" ||
+        host == "0.0.0.0" ||
+        host == "::1";
   }
 
   String _trackingLabel(TrackingStatus? s) {
-    if (s == null) return "…";
-    if (!s.paused) return "ON";
+    if (s == null) return "采集…";
+    if (!s.paused) return "采集中";
     final until = s.pausedUntilTs;
-    if (until == null || until.trim().isEmpty) return "PAUSED";
+    if (until == null || until.trim().isEmpty) return "已暂停";
     try {
       final t = DateTime.parse(until).toLocal();
       final diff = t.difference(DateTime.now());
-      if (diff.inSeconds <= 0) return "PAUSED";
+      if (diff.inSeconds <= 0) return "已暂停";
       final m = (diff.inSeconds / 60).ceil().clamp(1, 9999);
-      return "PAUSED ${m}m";
+      return "已暂停 ${m}m";
     } catch (_) {
-      return "PAUSED";
+      return "已暂停";
     }
   }
 
@@ -91,9 +96,12 @@ class _IoTrayController with WindowListener implements TrayController {
       final ok = info.service == "recorder_core";
       if (!ok) return const _TrayStatus(coreHealthy: false, trackingLabel: "…");
       final tracking = await c.trackingStatus();
-      return _TrayStatus(coreHealthy: true, trackingLabel: _trackingLabel(tracking));
+      return _TrayStatus(
+          coreHealthy: true, trackingLabel: _trackingLabel(tracking));
     } catch (_) {
       return const _TrayStatus(coreHealthy: false, trackingLabel: "…");
+    } finally {
+      c.close();
     }
   }
 
@@ -136,6 +144,7 @@ class _IoTrayController with WindowListener implements TrayController {
     } catch (_) {
       // ignore
     } finally {
+      c.close();
       unawaited(refreshStatus());
     }
   }
@@ -148,6 +157,7 @@ class _IoTrayController with WindowListener implements TrayController {
     } catch (_) {
       // ignore
     } finally {
+      c.close();
       unawaited(refreshStatus());
     }
   }
@@ -161,7 +171,12 @@ class _IoTrayController with WindowListener implements TrayController {
 
     _busy = true;
     try {
-      await agent.start(coreUrl: url, restart: restart, sendTitle: true, trackAudio: true, reviewNotify: true);
+      await agent.start(
+          coreUrl: url,
+          restart: restart,
+          sendTitle: true,
+          trackAudio: true,
+          reviewNotify: true);
     } catch (_) {
       // ignore
     } finally {
@@ -201,7 +216,8 @@ class _IoTrayController with WindowListener implements TrayController {
 
   Future<void> _rebuildMenu() async {
     final url = _getServerUrl?.call() ?? "";
-    final canStartAgent = _isLocalhostServer(url) && DesktopAgent.instance.isAvailable;
+    final canStartAgent =
+        _isLocalhostServer(url) && DesktopAgent.instance.isAvailable;
 
     final statusLine = _status.coreHealthy ? "Core: OK" : "Core: DOWN";
     final trackingLine = "Tracking: ${_status.trackingLabel}";
@@ -210,7 +226,8 @@ class _IoTrayController with WindowListener implements TrayController {
       MenuItemLabel(label: "RecorderPhone", enabled: false),
       MenuItemLabel(label: statusLine, enabled: false),
       MenuItemLabel(label: trackingLine, enabled: false),
-      if (url.trim().isNotEmpty) MenuItemLabel(label: "Server: $url", enabled: false),
+      if (url.trim().isNotEmpty)
+        MenuItemLabel(label: "Server: $url", enabled: false),
       MenuSeparator(),
       MenuItemLabel(label: "Open / Hide", onClicked: (_) => _toggleWindow()),
       MenuItemLabel(
@@ -221,9 +238,12 @@ class _IoTrayController with WindowListener implements TrayController {
         },
       ),
       MenuSeparator(),
-      MenuItemLabel(label: "Pause 15m", onClicked: (_) => _pauseTracking(minutes: 15)),
-      MenuItemLabel(label: "Pause 1h", onClicked: (_) => _pauseTracking(minutes: 60)),
-      MenuItemLabel(label: "Pause (manual)", onClicked: (_) => _pauseTracking()),
+      MenuItemLabel(
+          label: "Pause 15m", onClicked: (_) => _pauseTracking(minutes: 15)),
+      MenuItemLabel(
+          label: "Pause 1h", onClicked: (_) => _pauseTracking(minutes: 60)),
+      MenuItemLabel(
+          label: "Pause (manual)", onClicked: (_) => _pauseTracking()),
       MenuItemLabel(label: "Resume", onClicked: (_) => _resumeTracking()),
       MenuSeparator(),
       MenuItemLabel(
@@ -269,7 +289,8 @@ class _IoTrayController with WindowListener implements TrayController {
     await _tray.initSystemTray(title: "RecorderPhone", iconPath: iconPath);
 
     _tray.registerSystemTrayEventHandler((eventName) {
-      if (eventName == kSystemTrayEventClick || eventName == kSystemTrayEventDoubleClick) {
+      if (eventName == kSystemTrayEventClick ||
+          eventName == kSystemTrayEventDoubleClick) {
         // Keep this simple and reliable: click always brings the window to front.
         unawaited(_showWindow());
         return;
@@ -282,7 +303,8 @@ class _IoTrayController with WindowListener implements TrayController {
     });
 
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 15), (_) => refreshStatus());
+    _timer =
+        Timer.periodic(const Duration(seconds: 15), (_) => refreshStatus());
     await refreshStatus();
 
     if (startHidden) {

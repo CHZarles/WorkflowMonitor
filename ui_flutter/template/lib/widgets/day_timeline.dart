@@ -3,6 +3,7 @@ import "package:flutter/gestures.dart";
 
 import "../theme/tokens.dart";
 import "entity_avatar.dart";
+import "recorder_tooltip.dart";
 
 class _TimelineScrollBehavior extends MaterialScrollBehavior {
   @override
@@ -219,7 +220,7 @@ class DayTimeline extends StatelessWidget {
                       .clamp(2.0, width)
                       .toDouble(),
                   height: barHeight,
-                  child: Tooltip(
+                  child: RecorderTooltip(
                     message: bar.tooltip,
                     child: MouseRegion(
                       cursor: onBarTap == null
@@ -286,7 +287,7 @@ class DayTimeline extends StatelessWidget {
                         ),
                         const SizedBox(width: RecorderTokens.space2),
                         Expanded(
-                          child: Tooltip(
+                          child: RecorderTooltip(
                             message: lane.subtitle == null
                                 ? "${lane.label}\n${_formatDurationShort(lane.totalSeconds)}"
                                 : "${lane.label}\n${lane.subtitle}\n${_formatDurationShort(lane.totalSeconds)}",

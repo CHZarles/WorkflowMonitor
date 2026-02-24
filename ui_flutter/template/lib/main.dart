@@ -1,6 +1,8 @@
 import "package:flutter/material.dart";
 import "package:flutter/foundation.dart";
 
+import "package:shared_preferences/shared_preferences.dart";
+
 import "utils/platform_args.dart";
 import "utils/single_instance.dart";
 
@@ -8,11 +10,16 @@ import "screens/app_shell.dart";
 import "mobile/mobile_shell.dart";
 import "theme/recorder_theme.dart";
 
+const _prefWindowsDisableSemantics = "windows_disable_semantics";
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final args = executableArgs();
   final deepLink = _extractDeepLink(args);
-  final startMinimized = deepLink == null && _hasFlag(args, const ["--minimized", "--tray", "--background"]);
+  final startMinimized = deepLink == null &&
+      _hasFlag(args, const ["--minimized", "--tray", "--background"]);
+
+  final disableSemantics = await _resolveDisableSemantics(args);
 
   final single = await ensureSingleInstance(args);
   if (single == null) {
@@ -25,6 +32,7 @@ Future<void> main() async {
       initialDeepLink: deepLink,
       startMinimized: startMinimized,
       externalCommands: single.messages,
+      disableSemantics: disableSemantics,
     ),
   );
 }
@@ -35,16 +43,19 @@ class RecorderPhoneApp extends StatelessWidget {
     this.initialDeepLink,
     this.startMinimized = false,
     this.externalCommands,
+    this.disableSemantics = false,
   });
 
   final String? initialDeepLink;
   final bool startMinimized;
   final Stream<String>? externalCommands;
+  final bool disableSemantics;
 
   @override
   Widget build(BuildContext context) {
-    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-    return MaterialApp(
+    final isAndroid =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    final app = MaterialApp(
       title: "RecorderPhone",
       theme: RecorderTheme.light(),
       darkTheme: RecorderTheme.dark(),
@@ -57,6 +68,9 @@ class RecorderPhoneApp extends StatelessWidget {
               externalCommands: externalCommands,
             ),
     );
+
+    if (!disableSemantics) return app;
+    return ExcludeSemantics(child: app);
   }
 }
 
@@ -69,10 +83,33 @@ String? _extractDeepLink(List<String> args) {
 }
 
 bool _hasFlag(List<String> args, List<String> flags) {
-  final set = flags.map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+  final set = flags
+      .map((e) => e.trim().toLowerCase())
+      .where((e) => e.isNotEmpty)
+      .toSet();
   for (final a in args) {
     final s = a.trim().toLowerCase();
     if (set.contains(s)) return true;
   }
   return false;
+}
+
+Future<bool> _resolveDisableSemantics(List<String> args) async {
+  final isWindows = !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+  if (!isWindows) return false;
+
+  // Opt-in flags (so you can debug with accessibility enabled when needed).
+  final wantA11y =
+      _hasFlag(args, const ["--a11y", "--enable-a11y", "--accessibility"]);
+  if (wantA11y) return false;
+
+  // Persisted setting (defaults to "on" in debug to avoid noisy AXTree logs).
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getBool(_prefWindowsDisableSemantics);
+    if (v != null) return v;
+  } catch (_) {
+    // ignore
+  }
+  return kDebugMode;
 }
