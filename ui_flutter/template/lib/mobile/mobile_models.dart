@@ -30,6 +30,23 @@ class MobileTopItem {
   }
 }
 
+class MobileNow {
+  const MobileNow({
+    required this.id,
+    this.label,
+    required this.timestampMs,
+  });
+
+  final String id; // packageName
+  final String? label;
+  final int timestampMs;
+
+  String get displayName {
+    final v = (label ?? "").trim();
+    return v.isEmpty ? id : v;
+  }
+}
+
 class MobileReview {
   const MobileReview({
     required this.updatedAtIso,

@@ -33,6 +33,12 @@ adb devices
 cd C:\src\RecorderPhone
 powershell -ExecutionPolicy Bypass -File .\dev\run-android.ps1
 ```
+如果你电脑上同时连了多个设备/模拟器，`flutter run` 会提示你选择；或者你也可以显式指定设备 id：
+```powershell
+flutter devices
+# 复制设备 id（例如 emulator-5554 / R58N...）
+powershell -ExecutionPolicy Bypass -File .\dev\run-android.ps1 -Device <deviceId>
+```
 
 ### 手动步骤（发生问题时用）
 在 **Windows PowerShell** 复制执行：
@@ -47,7 +53,7 @@ cd .\recorderphone_ui
 # 如果你之前只创建了 Windows 平台，需要补 Android 平台目录（只需执行一次）
 flutter create --platforms=windows,android --overwrite .
 
-flutter run -d android
+flutter run
 ```
 
 首次打开 App：
@@ -57,6 +63,25 @@ flutter run -d android
 ---
 
 ## 4) 常见问题
+
+### Q：`Running Gradle task 'assembleDebug'...` 看起来卡住？
+A：第一次构建可能需要下载依赖（常见 5–15 分钟）。如果你想看详细进度，用 Gradle 直跑：
+```powershell
+cd C:\src\RecorderPhone\recorderphone_ui\android
+.\gradlew.bat assembleDebug --stacktrace --info --no-daemon
+```
+
+### Q：Gradle 报 `Timeout waiting to lock build logic queue` / `buildLogic.lock`？
+A：同一个工程同时有另一个 Gradle 在跑（常见原因：Android Studio 后台 Sync、或你开了多个 `flutter run`）。
+```powershell
+# 结束旧的 Gradle daemon（推荐）
+cd C:\src\RecorderPhone\recorderphone_ui\android
+.\gradlew.bat --stop
+
+# 如果 lock 仍残留（无占用时可删）
+Remove-Item -Force .\.gradle\noVersion\buildLogic.lock -ErrorAction SilentlyContinue
+```
+然后重新 `flutter run` 即可。
 
 ### Q：为什么看见的是包名（com.xxx）而不是应用名？
 A：已在插件里做了 label 解析；如果你看到旧数据，去 `Settings → Wipe all` 清空后重新生成 blocks。

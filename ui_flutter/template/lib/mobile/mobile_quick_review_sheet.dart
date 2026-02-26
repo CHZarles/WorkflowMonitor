@@ -5,6 +5,7 @@ import "../theme/tokens.dart";
 import "../utils/format.dart";
 import "mobile_models.dart";
 import "mobile_store.dart";
+import "mobile_widgets.dart";
 
 class MobileQuickReviewSheet extends StatefulWidget {
   const MobileQuickReviewSheet({super.key, required this.block});
@@ -23,7 +24,7 @@ class _MobileQuickReviewSheetState extends State<MobileQuickReviewSheet> {
   bool _skipSaving = false;
   final Set<String> _tags = {};
 
-  static const _presetTags = ["Work", "Meeting", "Learning", "Admin", "Life", "Entertainment"];
+  static const _presetTags = ["工作", "会议", "学习", "行政", "生活", "娱乐"];
 
   @override
   void initState() {
@@ -62,13 +63,15 @@ class _MobileQuickReviewSheetState extends State<MobileQuickReviewSheet> {
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save failed: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("保存失败：$e")));
     } finally {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _skipSaving = false;
-      });
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _skipSaving = false;
+        });
+      }
     }
   }
 
@@ -77,8 +80,8 @@ class _MobileQuickReviewSheetState extends State<MobileQuickReviewSheet> {
     final bottom = MediaQuery.of(context).viewInsets.bottom;
     final start = DateTime.fromMillisecondsSinceEpoch(widget.block.startMs);
     final end = DateTime.fromMillisecondsSinceEpoch(widget.block.endMs);
-    final title = "${formatHHMM(start.toUtc().toIso8601String())}–${formatHHMM(end.toUtc().toIso8601String())}";
-    final top = widget.block.topItems.take(3).map((it) => "${it.displayName} ${formatDuration(it.seconds)}").join(" · ");
+    final title =
+        "${formatHHMM(start.toUtc().toIso8601String())}–${formatHHMM(end.toUtc().toIso8601String())}";
 
     final skipped = widget.block.review?.skipped == true;
     final allTags = {..._presetTags, ..._tags}.toList();
@@ -102,36 +105,41 @@ class _MobileQuickReviewSheetState extends State<MobileQuickReviewSheet> {
           child: ListView(
             shrinkWrap: true,
             children: [
-              Text("Quick review", style: Theme.of(context).textTheme.titleMedium),
+              Text("快速复盘", style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: RecorderTokens.space1),
               Text(title, style: Theme.of(context).textTheme.labelMedium),
               const SizedBox(height: RecorderTokens.space2),
-              Text("Top: $top", style: Theme.of(context).textTheme.bodyMedium),
+              Text("Top", style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: RecorderTokens.space2),
+              MobileTopItemsList(items: widget.block.topItems),
               const SizedBox(height: RecorderTokens.space4),
               TextField(
                 controller: _doing,
-                decoration: const InputDecoration(labelText: "Doing (optional)"),
+                decoration: const InputDecoration(labelText: "在做什么（可选）"),
                 textInputAction: TextInputAction.next,
               ),
               const SizedBox(height: RecorderTokens.space3),
               TextField(
                 controller: _output,
-                decoration: const InputDecoration(labelText: "Output / Result"),
+                decoration: const InputDecoration(labelText: "产出 / 结果"),
                 minLines: 2,
                 maxLines: 5,
               ),
               const SizedBox(height: RecorderTokens.space3),
               TextField(
                 controller: _next,
-                decoration: const InputDecoration(labelText: "Next (optional)"),
+                decoration: const InputDecoration(labelText: "下一步（可选）"),
                 minLines: 1,
                 maxLines: 3,
               ),
               const SizedBox(height: RecorderTokens.space4),
               Row(
                 children: [
-                  Expanded(child: Text("Tags", style: Theme.of(context).textTheme.titleMedium)),
-                  Text(skipped ? "Skipped" : "", style: Theme.of(context).textTheme.labelMedium),
+                  Expanded(
+                      child: Text("标签",
+                          style: Theme.of(context).textTheme.titleMedium)),
+                  Text(skipped ? "已跳过" : "",
+                      style: Theme.of(context).textTheme.labelMedium),
                 ],
               ),
               const SizedBox(height: RecorderTokens.space2),
@@ -158,18 +166,28 @@ class _MobileQuickReviewSheetState extends State<MobileQuickReviewSheet> {
                 children: [
                   Expanded(
                     child: FilledButton(
-                      onPressed: _saving || _skipSaving ? null : () => _save(skipped: false),
+                      onPressed: _saving || _skipSaving
+                          ? null
+                          : () => _save(skipped: false),
                       child: _saving
-                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Text("Save"),
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Text("保存"),
                     ),
                   ),
                   const SizedBox(width: RecorderTokens.space3),
                   OutlinedButton(
-                    onPressed: _saving || _skipSaving ? null : () => _save(skipped: !skipped),
+                    onPressed: _saving || _skipSaving
+                        ? null
+                        : () => _save(skipped: !skipped),
                     child: _skipSaving
-                        ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : Text(skipped ? "Unskip" : "Skip"),
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : Text(skipped ? "取消跳过" : "跳过"),
                   ),
                 ],
               ),

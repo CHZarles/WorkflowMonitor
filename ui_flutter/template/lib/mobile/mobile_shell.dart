@@ -16,11 +16,15 @@ class _MobileShellState extends State<MobileShell> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = const [MobileTodayScreen(), MobileReviewScreen(), MobileSettingsScreen()];
-    final items = const [
-      BottomNavigationBarItem(icon: Icon(Icons.today), label: "Today"),
-      BottomNavigationBarItem(icon: Icon(Icons.checklist), label: "Review"),
-      BottomNavigationBarItem(icon: Icon(Icons.settings), label: "Settings"),
+    const pages = [
+      MobileTodayScreen(),
+      MobileReviewScreen(),
+      MobileSettingsScreen()
+    ];
+    const items = [
+      BottomNavigationBarItem(icon: Icon(Icons.today), label: "今天"),
+      BottomNavigationBarItem(icon: Icon(Icons.checklist), label: "复盘"),
+      BottomNavigationBarItem(icon: Icon(Icons.settings), label: "设置"),
     ];
 
     return Scaffold(
@@ -33,4 +37,3 @@ class _MobileShellState extends State<MobileShell> {
     );
   }
 }
-

@@ -26,7 +26,8 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _blockMinutes = TextEditingController(text: MobilePrefs.defaultBlockMinutes.toString());
+    _blockMinutes =
+        TextEditingController(text: MobilePrefs.defaultBlockMinutes.toString());
     _loadPrefsAndPerms();
   }
 
@@ -69,11 +70,15 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Wipe all data?"),
-        content: const Text("This deletes all local blocks and reviews on this phone."),
+        title: const Text("清空全部数据？"),
+        content: const Text("这会删除本机所有分段与复盘记录。"),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Wipe")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("取消")),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("清空")),
         ],
       ),
     );
@@ -82,7 +87,8 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
     try {
       await MobileStore.instance.wipeAll();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Wiped.")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("已清空。")));
     } finally {
       if (mounted) setState(() => _wiping = false);
     }
@@ -91,7 +97,7 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Settings")),
+      appBar: AppBar(title: const Text("设置")),
       body: ListView(
         padding: const EdgeInsets.all(RecorderTokens.space4),
         children: [
@@ -100,11 +106,13 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
               padding: const EdgeInsets.all(RecorderTokens.space4),
               child: Row(
                 children: [
-                  Icon(_usageAccess ? Icons.check_circle_outline : Icons.lock_outline),
+                  Icon(_usageAccess
+                      ? Icons.check_circle_outline
+                      : Icons.lock_outline),
                   const SizedBox(width: RecorderTokens.space3),
                   Expanded(
                     child: Text(
-                      _usageAccess ? "Usage Access: ON" : "Usage Access: OFF (required)",
+                      _usageAccess ? "使用情况访问权限：已开启" : "使用情况访问权限：未开启（必须）",
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ),
@@ -115,15 +123,28 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
                         : () async {
                             await MobileUsage.instance.openPermissionSettings();
                           },
-                    child: const Text("Open"),
+                    child: const Text("打开系统设置"),
+                  ),
+                  const SizedBox(width: RecorderTokens.space1),
+                  IconButton(
+                    onPressed: _permLoading
+                        ? null
+                        : () async {
+                            await MobileUsage.instance.openAppSettings();
+                          },
+                    icon: const Icon(Icons.info_outline),
+                    tooltip: "应用信息",
                   ),
                   const SizedBox(width: RecorderTokens.space2),
                   IconButton(
                     onPressed: _permLoading ? null : _loadPrefsAndPerms,
                     icon: _permLoading
-                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.refresh),
-                    tooltip: "Refresh",
+                    tooltip: "刷新",
                   ),
                 ],
               ),
@@ -136,14 +157,14 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text("Blocks", style: Theme.of(context).textTheme.titleMedium),
+                  Text("分段", style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: RecorderTokens.space3),
                   TextField(
                     controller: _blockMinutes,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
-                      labelText: "Block length (minutes)",
-                      helperText: "Default 45. Changing this affects newly generated blocks.",
+                      labelText: "分段长度（分钟）",
+                      helperText: "默认 45。修改只影响新生成的分段。",
                     ),
                     onChanged: (_) => _scheduleSaveBlockMinutes(),
                     onSubmitted: (_) => _scheduleSaveBlockMinutes(),
@@ -159,12 +180,12 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text("Data", style: Theme.of(context).textTheme.titleMedium),
+                  Text("数据", style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: RecorderTokens.space3),
                   FilledButton.icon(
                     onPressed: _wiping ? null : _wipeAll,
                     icon: const Icon(Icons.delete_forever),
-                    label: Text(_wiping ? "Wiping…" : "Wipe all"),
+                    label: Text(_wiping ? "清空中…" : "清空全部"),
                   ),
                 ],
               ),

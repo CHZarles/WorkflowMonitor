@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS blocks (
         if (obj is Map) review = MobileReview.fromJson(obj);
       }
 
+      // Follow the Windows-side UX: don't surface blocks that have no activity.
+      // (But keep reviewed/skipped blocks visible so user input isn't lost.)
+      if (top.isEmpty && review == null) {
+        continue;
+      }
+
       out.add(MobileBlock(
         id: id,
         startMs: startMs,
@@ -148,28 +154,67 @@ CREATE TABLE IF NOT EXISTS blocks (
   }) async {
     final db = await _open();
     final start = DateTime(dayLocal.year, dayLocal.month, dayLocal.day);
+    final end = start.add(const Duration(days: 1));
     final now = DateTime.now();
     final blockMs = blockSize.inMilliseconds;
     if (blockMs < const Duration(minutes: 5).inMilliseconds) return;
 
     final dayStartMs = start.millisecondsSinceEpoch;
+    final dayEndMs = end.millisecondsSinceEpoch;
     final nowMs = now.millisecondsSinceEpoch;
+    final limitMs = nowMs < dayEndMs ? nowMs : dayEndMs;
+    if (limitMs <= dayStartMs) return;
 
-    for (var s = dayStartMs; s + blockMs <= nowMs; s += blockMs) {
+    final existingRows = await db.rawQuery(
+      "SELECT start_ms FROM blocks WHERE start_ms >= ? AND start_ms < ?",
+      [dayStartMs, dayEndMs],
+    );
+    final existingStarts = <int>{};
+    for (final r in existingRows) {
+      final raw = r["start_ms"];
+      final v = raw is int ? raw : int.tryParse(raw.toString());
+      if (v != null && v > 0) existingStarts.add(v);
+    }
+
+    for (var s = dayStartMs; s + blockMs <= limitMs; s += blockMs) {
       final e = s + blockMs;
 
-      final exists = await db.rawQuery(
-        "SELECT 1 FROM blocks WHERE start_ms = ? LIMIT 1",
-        [s],
+      final items = await MobileUsage.instance.queryTopApps(
+        startMs: s,
+        endMs: e,
+        lookbackMs: (s - dayStartMs).clamp(0, 24 * 60 * 60 * 1000),
       );
-      if (exists.isNotEmpty) continue;
-
-      final items =
-          await MobileUsage.instance.queryTopApps(startMs: s, endMs: e);
       final id = "a-${s.toString()}";
+
+      if (existingStarts.contains(s)) {
+        if (items.isEmpty) {
+          // Keep the DB lean (and match Windows UX): if a previously-created block
+          // now has no activity, drop it unless the user has reviewed/skipped it.
+          await db.rawDelete(
+            "DELETE FROM blocks WHERE start_ms = ? AND (review_json IS NULL OR TRIM(review_json) = '')",
+            [s],
+          );
+          continue;
+        }
+
+        final topJson = jsonEncode(items.map((it) => it.toJson()).toList());
+        // Update existing blocks in-place to:
+        // 1) reflect delayed UsageStats/UsageEvents updates
+        // 2) fix previously computed blocks after app upgrades
+        // while preserving any review_json already written.
+        await db.rawUpdate(
+          "UPDATE blocks SET end_ms = ?, top_json = ? WHERE start_ms = ?",
+          [e, topJson, s],
+        );
+        continue;
+      }
+
+      if (items.isEmpty) continue;
+
+      final topJson = jsonEncode(items.map((it) => it.toJson()).toList());
       await db.rawInsert(
         "INSERT INTO blocks(id, start_ms, end_ms, top_json, review_json) VALUES(?, ?, ?, ?, NULL)",
-        [id, s, e, jsonEncode(items.map((it) => it.toJson()).toList())],
+        [id, s, e, topJson],
       );
     }
   }

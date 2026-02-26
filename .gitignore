@@ -34,6 +34,10 @@ ui_flutter/**/.flutter-plugins
 ui_flutter/**/.flutter-plugins-dependencies
 ui_flutter/**/.idea/
 
+# Flutter (packages/)
+packages/**/.dart_tool/
+packages/**/pubspec.lock
+
 # Flutter (repo-local template package)
 recorderphone_ui/**/.dart_tool/
 recorderphone_ui/**/build/
