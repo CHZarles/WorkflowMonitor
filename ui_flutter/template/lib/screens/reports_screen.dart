@@ -1,7 +1,9 @@
 import "dart:async";
 
 import "package:flutter/material.dart";
+import "package:flutter_markdown/flutter_markdown.dart";
 import "package:flutter/services.dart";
+import "package:markdown/markdown.dart" as md;
 
 import "../api/core_client.dart";
 import "../theme/tokens.dart";
@@ -1275,12 +1277,18 @@ class _ReportDetailSheetState extends State<_ReportDetailSheet> {
                         ),
                         padding: const EdgeInsets.all(RecorderTokens.space3),
                         child: SingleChildScrollView(
-                          child: SelectableText(
-                            out.isEmpty ? "(No output)" : out,
-                            style:
-                                Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      fontFamily: "monospace",
-                                    ),
+                          child: MarkdownBody(
+                            data: out.isEmpty ? "*(No output)*" : out,
+                            selectable: true,
+                            extensionSet: md.ExtensionSet.gitHubFlavored,
+                            styleSheet: MarkdownStyleSheet.fromTheme(
+                              Theme.of(context),
+                            ).copyWith(
+                              code: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(fontFamily: "monospace"),
+                            ),
                           ),
                         ),
                       ),

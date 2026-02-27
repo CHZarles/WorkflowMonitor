@@ -39,18 +39,22 @@ const DEFAULT_DAILY_PROMPT: &str = r#"
 你是严格的个人复盘助手。只能使用我提供的 JSON 数据，不要猜测/脑补；缺失信息用 N/A。
 只输出 Markdown（不要代码围栏），不要输出任何额外解释。
 
-目标：把 {{date}} 的使用记录整理成可直接贴到笔记里的“日报表格”，并给出 3~5 条可执行建议。
+目标：把 {{date}} 的使用记录整理成可直接贴到笔记里的“日报表格”，并给出 3~6 条可执行建议（必须与数据强相关）。
 
 输出结构：
 1) 标题：# {{date}} 日报（RecorderPhone）
 2) 概览表（必须是 Markdown 表格）：
 | 指标 | 值 | 备注 |
-至少包含：Focus 总时长、Background audio 总时长、Blocks 数、已复盘 Blocks 数、未复盘 Blocks 数、Top1 占比、最晚活动时间、隐私级别。
-3) Top 列表（最多 10 行，表格）：
+至少包含：Focus 总时长、Background audio 总时长、Blocks 数、已复盘 Blocks 数、未复盘 Blocks 数、Top1 占比、Focus 上下文数、Focus 切换次数、黑名单 Focus 时长、最晚活动时间、隐私级别。
+3) 时间分布（表格，最多 8 行）：
+| 时段(小时) | Focus | Audio | 备注 |
+规则：优先用 input.stats.focus_top_hours；若为空，再从 input.stats.focus_by_hour_seconds 推导。列出 Focus 最多的 Top 6 小时，再加 1 行“其余”。
+4) Top 列表（最多 10 行，表格）：
 | Rank | 类型(app/site) | 名称(优先 title；没有就用域名/应用) | 次级信息(域名/应用) | 时长 | 占比 | 黑名单? |
-4) Blocks 表（按时间升序，最多 20 行，超出就合并为“其余”一行）：
+5) Blocks 表（按时间升序，最多 20 行，超出就合并为“其余”一行）：
 | 时间段 | Top Focus | Focus 时长 | Top Audio | Audio 时长 | doing/output/next(若有) | Tags | 状态(reviewed/skipped/pending) |
-5) 洞察与建议：3~5 条 bullet，每条以 “Action:” 开头，必须可执行且与数据强相关。
+6) 洞察与建议：3~6 条 bullet，每条以 “Action:” 开头，必须可执行且与数据强相关。
+建议尽量覆盖：节奏（高峰时段）、碎片化（切换次数/上下文数）、黑名单时间、未复盘 block 的闭环。
 
 输入 JSON：
 {{json}}
@@ -3307,6 +3311,115 @@ fn render_prompt_template(template: &str, vars: &[(&str, &str)], json_text: &str
     format!("{out}\n\nInput JSON:\n{json_text}")
 }
 
+fn extract_text_from_openai_compat_content(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.to_string()),
+        Value::Array(arr) => {
+            // Some providers (or future compat modes) return structured content parts:
+            //   [{ "type": "text", "text": "..." }, ...]
+            // We best-effort concatenate any textual fragments.
+            let mut out = String::new();
+            for it in arr {
+                if let Some(s) = it.as_str() {
+                    out.push_str(s);
+                    continue;
+                }
+                let Some(obj) = it.as_object() else {
+                    continue;
+                };
+                if let Some(s) = obj.get("text").and_then(|t| t.as_str()) {
+                    out.push_str(s);
+                    continue;
+                }
+                if let Some(s) = obj
+                    .get("text")
+                    .and_then(|t| t.get("value"))
+                    .and_then(|t| t.as_str())
+                {
+                    out.push_str(s);
+                    continue;
+                }
+                if let Some(s) = obj.get("content").and_then(|t| t.as_str()) {
+                    out.push_str(s);
+                    continue;
+                }
+            }
+            if out.trim().is_empty() {
+                None
+            } else {
+                Some(out)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn strip_tag_blocks(input: &str, open: &str, close: &str) -> String {
+    let mut s = input.to_string();
+    loop {
+        let Some(start) = s.find(open) else {
+            break;
+        };
+        let search_from = start + open.len();
+        let Some(rel_end) = s[search_from..].find(close) else {
+            // No closing tag; remove the opening tag only.
+            s.replace_range(start..search_from, "");
+            break;
+        };
+        let end = search_from + rel_end + close.len();
+        s.replace_range(start..end, "");
+    }
+    s
+}
+
+fn strip_wrapping_code_fence(input: &str) -> String {
+    let t = input.trim();
+    if !t.starts_with("```") {
+        return t.to_string();
+    }
+    let Some(first_nl) = t.find('\n') else {
+        return t.to_string();
+    };
+    let after_open = &t[first_nl + 1..];
+    let after_open_trimmed = after_open.trim_end();
+    if !after_open_trimmed.ends_with("```") {
+        return t.to_string();
+    }
+    if let Some(close_start) = after_open_trimmed.rfind("\n```") {
+        return after_open_trimmed[..close_start].trim().to_string();
+    }
+    // Body might be empty (```...\n```).
+    let body = after_open_trimmed.trim_end_matches("```");
+    body.trim().to_string()
+}
+
+fn extract_tag_block(input: &str, open: &str, close: &str) -> Option<String> {
+    let t = input;
+    let start = t.find(open)?;
+    let search_from = start + open.len();
+    let rel_end = t[search_from..].find(close)?;
+    let end = search_from + rel_end;
+    Some(t[search_from..end].to_string())
+}
+
+fn sanitize_llm_markdown_output(input: &str) -> String {
+    let mut s = input.to_string();
+
+    // Some chain-of-thought models output <final>...</final>. If present, prefer the final block.
+    if let Some(final_block) = extract_tag_block(&s, "<final>", "</final>") {
+        s = final_block;
+    }
+
+    // Common reasoning tags used by some chain-of-thought models.
+    s = strip_tag_blocks(&s, "<think>", "</think>");
+    s = strip_tag_blocks(&s, "<analysis>", "</analysis>");
+
+    // Some providers wrap the whole result in a single code fence.
+    s = strip_wrapping_code_fence(&s);
+
+    s.trim().to_string()
+}
+
 async fn openai_chat_completions_markdown(
     cfg: &ReportSettings,
     prompt: &str,
@@ -3322,7 +3435,7 @@ async fn openai_chat_completions_markdown(
       "messages": [
         {
           "role": "system",
-          "content": "You are a strict personal review assistant. Output only Markdown. Follow the user's instructions exactly.",
+          "content": "You are a strict personal review assistant. Output ONLY the final Markdown. Do NOT include any reasoning, scratchpad, <think>/<analysis> tags, or code fences.",
         },
         { "role": "user", "content": prompt },
       ],
@@ -3345,25 +3458,33 @@ async fn openai_chat_completions_markdown(
     }
 
     let v: Value = res.json().await?;
-    let content = v
+    let raw = v
         .get("choices")
         .and_then(|c| c.get(0))
         .and_then(|c0| {
             c0.get("message")
                 .and_then(|m| m.get("content"))
-                .and_then(|s| s.as_str())
-                .map(|s| s.to_string())
+                .and_then(extract_text_from_openai_compat_content)
+                .or_else(|| {
+                    // Some compat providers might still return `text`.
+                    c0.get("text")
+                        .and_then(extract_text_from_openai_compat_content)
+                })
         })
         .or_else(|| {
-            // Some compat providers might still return `text`.
+            // Some compat providers might still return `text` at the choice level.
             v.get("choices")
                 .and_then(|c| c.get(0))
                 .and_then(|c0| c0.get("text"))
-                .and_then(|s| s.as_str())
-                .map(|s| s.to_string())
-        });
+                .and_then(extract_text_from_openai_compat_content)
+        })
+        .ok_or_else(|| anyhow::anyhow!("missing_content"))?;
 
-    content.ok_or_else(|| anyhow::anyhow!("missing_content"))
+    let out = sanitize_llm_markdown_output(&raw);
+    if out.trim().is_empty() {
+        return Err(anyhow::anyhow!("empty_output"));
+    }
+    Ok(out)
 }
 
 fn resolve_reports_output_dir(state: &AppState, cfg: &ReportSettings) -> PathBuf {
@@ -3610,6 +3731,153 @@ async fn generate_daily_report(
         (top1_seconds as f64) / (focus_seconds as f64)
     };
 
+    // Derived stats to help LLM produce richer, data-grounded insights.
+    let focus_segments_count = segments
+        .iter()
+        .filter(|s| s.activity.as_deref() != Some("audio"))
+        .count() as i64;
+    let audio_segments_count = segments
+        .iter()
+        .filter(|s| s.activity.as_deref() == Some("audio"))
+        .count() as i64;
+
+    let tz_offset_seconds = (tz_offset_minutes as i64) * 60;
+    let mut focus_by_hour_seconds = [0i64; 24];
+    let mut audio_by_hour_seconds = [0i64; 24];
+
+    let mut focus_context_switches: i64 = 0;
+    let mut focus_unique_contexts: HashSet<String> = HashSet::new();
+    let mut audio_unique_contexts: HashSet<String> = HashSet::new();
+    let mut last_focus_key: Option<String> = None;
+
+    let mut blocked_focus_seconds: i64 = 0;
+    let mut blocked_audio_seconds: i64 = 0;
+
+    let mut longest_focus: Option<&TimelineSegment> = None;
+    let mut longest_audio: Option<&TimelineSegment> = None;
+
+    for s in &segments {
+        let is_audio = s.activity.as_deref() == Some("audio");
+
+        let key = if s.kind == "domain" {
+            format!("domain|{}", s.entity.trim().to_lowercase())
+        } else if s.kind == "app" {
+            format!("app|{}", s.entity.trim())
+        } else {
+            format!("{}|{}", s.kind.trim(), s.entity.trim())
+        };
+
+        if is_audio {
+            audio_unique_contexts.insert(key.clone());
+            if longest_audio.map(|x| x.seconds).unwrap_or(0) < s.seconds {
+                longest_audio = Some(s);
+            }
+        } else {
+            focus_unique_contexts.insert(key.clone());
+            if let Some(prev) = &last_focus_key {
+                if prev != &key {
+                    focus_context_switches += 1;
+                }
+            }
+            last_focus_key = Some(key.clone());
+            if longest_focus.map(|x| x.seconds).unwrap_or(0) < s.seconds {
+                longest_focus = Some(s);
+            }
+        }
+
+        let blocked = if s.kind == "domain" {
+            is_blocked_domain(&s.entity, &blocked_domains)
+        } else if s.kind == "app" {
+            blocked_apps.contains(s.entity.trim())
+        } else {
+            false
+        };
+        if blocked {
+            if is_audio {
+                blocked_audio_seconds += s.seconds;
+            } else {
+                blocked_focus_seconds += s.seconds;
+            }
+        }
+
+        let (Ok(st), Ok(en)) = (
+            OffsetDateTime::parse(&s.start_ts, &Rfc3339),
+            OffsetDateTime::parse(&s.end_ts, &Rfc3339),
+        ) else {
+            continue;
+        };
+        if en <= st {
+            continue;
+        }
+
+        let mut cur = st.unix_timestamp() + tz_offset_seconds;
+        let end = en.unix_timestamp() + tz_offset_seconds;
+        let bins = if is_audio {
+            &mut audio_by_hour_seconds
+        } else {
+            &mut focus_by_hour_seconds
+        };
+        while cur < end {
+            let hour = ((cur.rem_euclid(86400)) / 3600) as usize;
+            let next_boundary = (cur.div_euclid(3600) + 1) * 3600;
+            let slice_end = next_boundary.min(end);
+            let delta = slice_end - cur;
+            if hour < 24 && delta > 0 {
+                bins[hour] += delta;
+            }
+            cur = slice_end;
+        }
+    }
+
+    let focus_peak_hour = focus_by_hour_seconds
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, v)| *v)
+        .map(|(h, v)| json!({ "hour": h, "seconds": *v }));
+    let audio_peak_hour = audio_by_hour_seconds
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, v)| *v)
+        .map(|(h, v)| json!({ "hour": h, "seconds": *v }));
+
+    let mut focus_top_hours: Vec<(usize, i64, i64)> = (0..24)
+        .map(|h| (h, focus_by_hour_seconds[h], audio_by_hour_seconds[h]))
+        .collect();
+    focus_top_hours.sort_by(|a, b| b.1.cmp(&a.1));
+    let focus_top_hours_json: Vec<Value> = focus_top_hours
+        .into_iter()
+        .filter(|(_, focus_s, _)| *focus_s > 0)
+        .take(6)
+        .map(|(hour, focus_s, audio_s)| {
+            json!({
+              "hour": hour,
+              "focus_seconds": focus_s,
+              "audio_seconds": audio_s,
+            })
+        })
+        .collect();
+
+    let longest_focus_json = longest_focus.map(|s| {
+        json!({
+          "kind": s.kind,
+          "entity": s.entity,
+          "title": s.title,
+          "seconds": s.seconds,
+          "start_ts": s.start_ts,
+          "end_ts": s.end_ts,
+        })
+    });
+    let longest_audio_json = longest_audio.map(|s| {
+        json!({
+          "kind": s.kind,
+          "entity": s.entity,
+          "title": s.title,
+          "seconds": s.seconds,
+          "start_ts": s.start_ts,
+          "end_ts": s.end_ts,
+        })
+    });
+
     let blocks_json: Vec<Value> = blocks
         .iter()
         .map(|b| {
@@ -3687,6 +3955,20 @@ async fn generate_daily_report(
       "stats": {
         "focus_seconds": focus_seconds,
         "audio_seconds": audio_seconds,
+        "focus_segments": focus_segments_count,
+        "audio_segments": audio_segments_count,
+        "focus_unique_contexts": focus_unique_contexts.len(),
+        "audio_unique_contexts": audio_unique_contexts.len(),
+        "focus_context_switches": focus_context_switches,
+        "blocked_focus_seconds": blocked_focus_seconds,
+        "blocked_audio_seconds": blocked_audio_seconds,
+        "focus_by_hour_seconds": focus_by_hour_seconds,
+        "audio_by_hour_seconds": audio_by_hour_seconds,
+        "focus_peak_hour": focus_peak_hour,
+        "audio_peak_hour": audio_peak_hour,
+        "focus_top_hours": focus_top_hours_json,
+        "longest_focus_segment": longest_focus_json,
+        "longest_audio_segment": longest_audio_json,
         "blocks_total": blocks.len(),
         "blocks_reviewed": reviewed,
         "blocks_pending": pending,
